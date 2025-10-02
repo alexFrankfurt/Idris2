@@ -9,7 +9,9 @@
 #include <termios.h>
 #endif
 #include <time.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #if !defined(_SC_NPROCESSORS_ONLN) && defined(_DARWIN_C_SOURCE)
 #include <sys/sysctl.h>

@@ -33,7 +33,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#else
 #include <unistd.h>
+#endif
 
 ssize_t getdelim(char **buf, size_t *bufsiz, int delimiter, FILE *fp) {
   char *ptr, *eptr;

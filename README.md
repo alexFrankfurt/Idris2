@@ -1,5 +1,7 @@
 # Idris 2
 
+This fork contains only necessary changes to the Idris2 repo that make it build and install on Windows in a straightforward way, read part about [Windows below](#windows-cmake--powershell).
+
 [![Documentation Status](https://readthedocs.org/projects/idris2/badge/?version=latest)](https://idris2.readthedocs.io/en/latest/?badge=latest)
 [![Build Status](https://github.com/idris-lang/Idris2/actions/workflows/ci-idris2-and-libs.yml/badge.svg?branch=main)](https://github.com/idris-lang/Idris2/actions/workflows/ci-idris2-and-libs.yml?query=branch%3Amain)
 
@@ -28,6 +30,86 @@ If your dependency is in the `depends` field of your `.ipkg` file, `pack` will a
 The wiki hosts a list of [curated packages by the community](https://github.com/idris-lang/Idris2/wiki/Third-party-Libraries).
 
 Finally, `pack` also makes it easy to download, and keep updated version of, [idris2-lsp](https://github.com/idris-community/idris2-lsp), and other idris-related programs.
+
+### Windows (CMake + PowerShell)
+
+This guide describes a Windows-first workflow using Visual Studio, CMake, PowerShell, and Racket.
+
+#### Prerequisites
+
+- Visual Studio 2022 (Desktop development with C++)
+- CMake (3.15+)
+- PowerShell 7+ (pwsh)
+- Racket (raco available in PATH)
+
+Optional: Git for Windows
+
+#### Configure, Bootstrap, Install
+
+Run these commands in PowerShell (quote all -D args):
+
+1) Configure (from the repository root)
+
+```
+cmake -S . -B build-cmake -D "IDRIS2_VERSION=0.7.0" -D "IDRIS2_CG=racket"
+```
+
+2) Bootstrap (stage1 + stage2)
+
+```
+cmake --build build-cmake --config Release -t bootstrap-racket
+```
+
+3) Install to a prefix (example C:\\Idris2)
+
+```
+cmake --install build-cmake --config Release --prefix "C:\\Idris2"
+```
+
+#### Install Layout
+
+- Binaries and runtime
+  - `C:\\Idris2\\bin\\idris2.ps1` (PowerShell launcher)
+  - `C:\\Idris2\\bin\\idris2.cmd` (cmd shim)
+  - `C:\\Idris2\\bin\\idris2_app\\idris2-boot.exe`
+  - `C:\\Idris2\\bin\\idris2_app\\libidris2_support.dll`
+- Libraries (compiled TTC files)
+  - `C:\\Idris2\\idris2-0.7.0\\prelude-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\base-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\linear-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\network-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\contrib-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\test-0.7.0\\...`
+  - `C:\\Idris2\\idris2-0.7.0\\papers-0.7.0\\...`
+- C support library and headers
+  - `C:\\Idris2\\idris2-0.7.0\\lib\\libidris2_support.dll`
+  - `C:\\Idris2\\idris2-0.7.0\\support\\c\\*.h`
+- Racket backend support
+  - `C:\\Idris2\\idris2-0.7.0\\support\\racket\\support.rkt`
+
+#### How to run Idris2
+
+- PowerShell (recommended):
+
+```
+& "C:\\Idris2\\bin\\idris2.ps1" --version
+& "C:\\Idris2\\bin\\idris2.ps1" .\\Main.idr -o main
+```
+
+- cmd.exe:
+
+```
+C:\\Idris2\\bin\\idris2.cmd --version
+C:\\Idris2\\bin\\idris2.cmd .\\Main.idr -o main
+```
+
+If you want, add `C:\\Idris2\\bin` to PATH.
+
+#### Notes
+
+- The launcher pre-creates common output directories (build/ttc, build/exec) in your project.
+- The launcher ensures the runtime DLL is copied into any generated `_app` folders after compile.
+- If you switch versions, re-run configure and install with the new `-D IDRIS2_VERSION=...`.
 
 ## Resources to Learn Idris 2
 

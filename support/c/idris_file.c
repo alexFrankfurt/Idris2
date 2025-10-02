@@ -1,13 +1,19 @@
 #include "idris_file.h"
 #include "getline.h"
 
+#ifndef _WIN32
 #include <dirent.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/time.h>
+#endif
 #include <time.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include "windows/win_utils.h"

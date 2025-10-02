@@ -1,10 +1,33 @@
+// Ensure modern Windows API features if building on Windows
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
+#endif
+
 #include "idris_signal.h"
 
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
+#ifdef _WIN32
+// MSVC without full C11 atomics support: emulate minimal atomic ops
+#include <windows.h>
+typedef volatile LONG atomic_uint_fast32_t;
+static inline unsigned long atomic_fetch_or(atomic_uint_fast32_t *obj, unsigned long val) {
+  return InterlockedOr(obj, val);
+}
+static inline unsigned long atomic_fetch_and(atomic_uint_fast32_t *obj, unsigned long val) {
+  return InterlockedAnd(obj, val);
+}
+static inline unsigned long atomic_load(atomic_uint_fast32_t *obj) {
+  MemoryBarrier();
+  return *obj;
+}
+#else
 #include <stdatomic.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +36,15 @@
 #include "idris_util.h"
 
 #if !defined(static_assert) && (defined(__GNUC__) || defined(__clang__)) &&    \
-    defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L &&                \
-    __STDC_VERSION__ <= 201710L
+  defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L &&                \
+  __STDC_VERSION__ <= 201710L
 #define static_assert _Static_assert
 #endif
 
+#ifndef _WIN32
 static_assert(ATOMIC_LONG_LOCK_FREE == 2,
-              "when not lock free, atomic functions are not async-signal-safe");
+        "when not lock free, atomic functions are not async-signal-safe");
+#endif
 
 #define N_SIGNALS 32
 static atomic_uint_fast32_t signals;

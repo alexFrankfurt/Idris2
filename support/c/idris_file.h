@@ -8,6 +8,9 @@
 #ifdef _WIN32
 #include <io.h>
 #include <processthreadsapi.h>
+// Provide POSIX-like typedefs for MSVC
+typedef int mode_t;
+typedef int pid_t;
 #endif
 
 FILE *idris2_openFile(char *name, char *mode);
