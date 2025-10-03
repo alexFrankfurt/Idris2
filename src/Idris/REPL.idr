@@ -1183,26 +1183,45 @@ mutual
          {auto o : Ref ROpts REPLOpts} ->
          Core ()
   repl
-      = do ns <- getNS
-           opts <- get ROpts
-           coreLift_ (putStr (prompt (evalMode opts) ++ show ns ++ "> "))
-           coreLift_ (fflush stdout)
-           inp <- coreLift getLine
-           end <- coreLift $ fEOF stdin
-           if end
-             then do
-               -- start a new line in REPL mode (not relevant in IDE mode)
-               coreLift_ $ putStrLn ""
-               iputStrLn "Bye for now!"
-              else do res <- interpret inp
-                      handleResult res
-
+      = do opts <- get ROpts
+           case replInput opts of
+             Nothing => replLoop
+             Just file => do
+               Right content <- coreLift $ readFile file
+                 | Left err => throw (FileErr file err)
+               let lines = lines content
+               replFromLines lines
     where
       prompt : REPLEval -> String
       prompt EvalTC = "[tc] "
       prompt NormaliseAll = ""
       prompt Execute = "[exec] "
       prompt Scheme = "[scheme] "
+
+      replLoop : Core ()
+      replLoop
+          = do ns <- getNS
+               opts <- get ROpts
+               coreLift_ (putStr (prompt (evalMode opts) ++ show ns ++ "> "))
+               coreLift_ (fflush stdout)
+               inp <- coreLift getLine
+               end <- coreLift $ fEOF stdin
+               if end
+                 then do
+                   -- start a new line in REPL mode (not relevant in IDE mode)
+                   coreLift_ $ putStrLn ""
+                   iputStrLn "Bye for now!"
+                  else do res <- interpret inp
+                          handleResult res
+
+      replFromLines : List String -> Core ()
+      replFromLines [] = pure ()
+      replFromLines (inp :: rest)
+          = do res <- interpret inp
+               case res of
+                 Exited => pure ()
+                 other => do displayResult other
+                             replFromLines rest
 
   export
   handleMissing' : MissedResult -> String

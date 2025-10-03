@@ -39,7 +39,42 @@ $launcherContent = @"
 `$env:IDRIS2_DATA = (Join-Path "${libRoot}" 'support')
 `$env:RACKET = "racket"
 `$env:RACKET_RACO = "raco"
-& (Join-Path `$app 'idris2-boot.exe') @args
+`# Support --repl-output <file> to tee REPL output to a file
+`$argList = New-Object System.Collections.Generic.List[string]
+`$argList.AddRange([string[]]`$args)
+`$replInput = $null
+`$i = 0
+`while (`$i -lt `$argList.Count) {
+`  `$a = `$argList[`$i]
+`  if (`$a -eq '--repl-output' -and (`$i + 1) -lt `$argList.Count) {
+`    `$env:IDRIS2_REPL_OUTPUT = `$argList[`$i + 1]
+`    `$argList.RemoveAt(`$i); `$argList.RemoveAt(`$i)
+`    continue
+`  }
+`  if (`$a -like '--repl-output=*') {
+`    `$env:IDRIS2_REPL_OUTPUT = `$a.Substring(`$a.IndexOf('=') + 1)
+`    `$argList.RemoveAt(`$i)
+`    continue
+`  }
+`  if (`$a -eq '--repl-input' -and (`$i + 1) -lt `$argList.Count) {
+`    `$replInput = `$argList[`$i + 1]
+`    `$argList.RemoveAt(`$i); `$argList.RemoveAt(`$i)
+`    continue
+`  }
+`  if (`$a -like '--repl-input=*') {
+`    `$replInput = `$a.Substring(`$a.IndexOf('=') + 1)
+`    `$argList.RemoveAt(`$i)
+`    continue
+`  }
+`  `$i++
+`}
+`$exe = Join-Path `$app 'idris2-boot.exe'
+`if (`$replInput) {
+`  Start-Process -FilePath `$exe -ArgumentList `$argList -NoNewWindow -Wait -RedirectStandardInput `$replInput | Out-Null
+`}
+`else {
+`  & `$exe @argList
+`}
 "@
 Write-Host "[Idris2] Writing launcher to: $launcherPath"
 $launcherContent | Out-File -FilePath $launcherPath -Encoding ASCII -Force

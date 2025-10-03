@@ -61,6 +61,11 @@ schHeader prof libs = fromString """
 
   """ ++ libs ++ """
 
+  ;; Check for REPL output redirection
+  (let ((repl-output (getenv "IDRIS2_REPL_OUTPUT")))
+    (when repl-output
+      (current-output-port (open-output-file repl-output #:exists 'append))))
+
   (let ()
 
   """

@@ -1037,6 +1037,8 @@ partitionOpts opts = foldr pOptUpdate (MkPFR [] [] False) opts
     optType WarningsAsErrors       = POpt
     optType HashesInsteadOfModTime = POpt
     optType Profile                = POpt
+    optType (ReplInput f)          = POpt
+    optType (ReplOutput f)         = POpt
     optType (ConsoleWidth n)       = PIgnore
     optType (Color b)              = PIgnore
     optType NoBanner               = PIgnore
@@ -1066,6 +1068,8 @@ errorMsg = unlines
   , "    --directive <directive>"
   , "    --build-dir <dir>"
   , "    --output-dir <dir>"
+  , "    --repl-input <file>"
+  , "    --repl-output <file>"
   ]
 
 export

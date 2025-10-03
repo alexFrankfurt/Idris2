@@ -573,6 +573,17 @@ postOptions res (CheckOnly :: rest)
 postOptions res (RunREPL str :: rest)
     = do replCmd str
          pure False
+postOptions res (ReplOutput file :: rest)
+    = do ignore $ coreLift $ setEnv "IDRIS2_REPL_OUTPUT" file False
+         postOptions res rest
+postOptions res (ReplInput file :: rest)
+  = do -- Resolve the file path early to avoid later working-directory changes
+    -- (e.g., switching to an ipkg directory) breaking relative paths.
+    Just cwd <- coreLift currentDir
+      | Nothing => throw (InternalError "Can't get current directory")
+    let absFile = if isAbsolute file then file else cwd </> file
+    update ROpts { replInput := Just absFile }
+    postOptions res rest
 postOptions res (_ :: rest) = postOptions res rest
 
 export

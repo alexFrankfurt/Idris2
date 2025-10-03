@@ -103,6 +103,11 @@ schHeader chez libs whole
 
     \{ showSep "\n" (map (\x => "(load-shared-object \"" ++ escapeStringChez x ++ "\")") libs) }
 
+    ;; Check for REPL output redirection
+    (let ((repl-output (getenv "IDRIS2_REPL_OUTPUT")))
+      (when repl-output
+        (current-output-port (open-output-file repl-output 'append))))
+
     \{ ifThenElse whole
                   "(let ()"
                   "(source-directories (cons (getenv \"IDRIS2_INC_SRC\") (source-directories)))"

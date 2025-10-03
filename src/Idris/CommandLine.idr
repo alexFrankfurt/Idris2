@@ -174,7 +174,11 @@ data CLOpt
    ||| Turn on %default total globally
   Total |
    ||| Disable common subexpression elimination
-  NoCSE
+  NoCSE |
+   ||| Redirect REPL output to a file
+  ReplOutput String |
+   ||| Read REPL input from a file
+  ReplInput String
 
 ||| Extract the host and port to bind the IDE socket to
 export
@@ -394,7 +398,11 @@ options = [MkOpt ["--check", "-c"] [] [CheckOnly]
            MkOpt ["--zsh-completion-script"]
                  [ Required "function name" ]
                  (\n => [ZshCompletionScript n])
-                 (Just "Generate a zsh script (via bashcompinit) to activate autocompletion for Idris2")
+                 (Just "Generate a zsh script (via bashcompinit) to activate autocompletion for Idris2"),
+           MkOpt ["--repl-output"] [Required "file"] (\f => [ReplOutput f])
+                 (Just "Redirect REPL output to the specified file"),
+           MkOpt ["--repl-input"] [Required "file"] (\f => [ReplInput f])
+                 (Just "Read REPL input from the specified file")
            ]
 
 optShow : OptDesc -> (String, Maybe String)

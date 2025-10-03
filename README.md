@@ -65,7 +65,11 @@ cmake --build build-cmake --config Release -t bootstrap-racket
 ```
 cmake --install build-cmake --config Release --prefix "C:\\Idris2"
 ```
+#### Clean
 
+```
+Remove-Item -Recurse -Force .\build-cmake, .\build, .\bootstrap-build, .\support\c\build
+```
 #### Install Layout
 
 - Binaries and runtime
@@ -107,8 +111,8 @@ If you want, add `C:\\Idris2\\bin` to PATH.
 
 #### Notes
 
-- The launcher pre-creates common output directories (build/ttc, build/exec) in your project.
-- The launcher ensures the runtime DLL is copied into any generated `_app` folders after compile.
+- The launcher now relies on Idris' built-in mkdirAll to create build directories on demand; no pre-creation or DLL copying is performed by the launcher.
+- To run the Idris 2 test suite on Windows via CMake, use the custom test target: build stage2 first, then `cmake --build . --config Release -t test` (from the build folder). You can filter tests by passing `-Only <pattern>` or `-Except <pattern>` via `tools/run-tests.ps1` directly.
 - If you switch versions, re-run configure and install with the new `-D IDRIS2_VERSION=...`.
 
 ## Resources to Learn Idris 2
