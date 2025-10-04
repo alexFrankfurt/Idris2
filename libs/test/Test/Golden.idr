@@ -79,7 +79,6 @@ import Data.List
 import Data.List1
 import Data.String
 import Data.String.Extra
-import Data.Char -- for toUpper, isAlpha
 
 import System
 import System.Clock
@@ -300,12 +299,14 @@ runTest opts testPath = do
     -- accepted by Windows APIs and avoid backslash escaping headaches.
     convertMsysPath : String -> String
     convertMsysPath p =
-      case unpack p of
-        '/' :: d :: '/' :: rest =>
-          if isAlpha d then pack (toLower d :: ':' :: '/' :: rest) else p
-        '/' :: 'c' :: 'y' :: 'g' :: 'd' :: 'r' :: 'i' :: 'v' :: 'e' :: '/' :: d :: '/' :: rest =>
-          if isAlpha d then pack (toLower d :: ':' :: '/' :: rest) else p
-        _ => p
+      let isAsciiLetter : Char -> Bool
+          isAsciiLetter c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+      in case unpack p of
+           '/' :: d :: '/' :: rest =>
+             if isAsciiLetter d then pack (toLower d :: ':' :: '/' :: rest) else p
+           '/' :: 'c' :: 'y' :: 'g' :: 'd' :: 'r' :: 'i' :: 'v' :: 'e' :: '/' :: d :: '/' :: rest =>
+             if isAsciiLetter d then pack (toLower d :: ':' :: '/' :: rest) else p
+           _ => p
 
     stripQuotes : String -> String
     stripQuotes s =
