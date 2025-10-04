@@ -85,16 +85,21 @@ printResult x = do
   case replOutput opts of
        Nothing => pure ()
        Just f => do
-         res <- coreLift $ openFile f Append
-         case res of
-              Left err => do
-                -- DEBUG: diagnose missing --repl-output file creation
-                coreLift_ $ putStrLn ("[debug] failed to open replOutput file: " ++ f ++ " error: " ++ show err)
-                pure () -- maintain silent behaviour otherwise
+         -- Try append first; if it fails because file is missing or inaccessible
+         -- fall back to creating it with WriteTruncate (single write) so future
+         -- appends succeed.
+         appendRes <- coreLift $ openFile f Append
+         case appendRes of
               Right h => do
                 ignore $ coreLift $ fPutStrLn h !(render x)
                 ignore $ coreLift $ closeFile h
-                coreLift_ $ putStrLn ("[debug] wrote repl output line to: " ++ f)
+              Left _ => do
+                createRes <- coreLift $ openFile f WriteTruncate
+                case createRes of
+                     Left _ => pure () -- silently ignore
+                     Right h => do
+                       ignore $ coreLift $ fPutStrLn h !(render x)
+                       ignore $ coreLift $ closeFile h
  --                                      ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -108,16 +113,18 @@ printDocResult x = do
   case replOutput opts of
        Nothing => pure ()
        Just f => do
-         res <- coreLift $ openFile f Append
-         case res of
-              Left err => do
-                -- DEBUG: diagnose missing --repl-output file creation
-                coreLift_ $ putStrLn ("[debug] failed to open replOutput file: " ++ f ++ " error: " ++ show err)
-                pure ()
+         appendRes <- coreLift $ openFile f Append
+         case appendRes of
               Right h => do
                 ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
                 ignore $ coreLift $ closeFile h
-                coreLift_ $ putStrLn ("[debug] wrote repl output (doc) line to: " ++ f)
+              Left _ => do
+                createRes <- coreLift $ openFile f WriteTruncate
+                case createRes of
+                     Left _ => pure ()
+                     Right h => do
+                       ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
+                       ignore $ coreLift $ closeFile h
  --                                                    ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
