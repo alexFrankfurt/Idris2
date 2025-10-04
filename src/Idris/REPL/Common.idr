@@ -87,10 +87,14 @@ printResult x = do
        Just f => do
          res <- coreLift $ openFile f Append
          case res of
-              Left _ => pure () -- silently ignore file errors
+              Left err => do
+                -- DEBUG: diagnose missing --repl-output file creation
+                coreLift_ $ putStrLn ("[debug] failed to open replOutput file: " ++ f ++ " error: " ++ show err)
+                pure () -- maintain silent behaviour otherwise
               Right h => do
                 ignore $ coreLift $ fPutStrLn h !(render x)
                 ignore $ coreLift $ closeFile h
+                coreLift_ $ putStrLn ("[debug] wrote repl output line to: " ++ f)
  --                                      ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -106,10 +110,14 @@ printDocResult x = do
        Just f => do
          res <- coreLift $ openFile f Append
          case res of
-              Left _ => pure ()
+              Left err => do
+                -- DEBUG: diagnose missing --repl-output file creation
+                coreLift_ $ putStrLn ("[debug] failed to open replOutput file: " ++ f ++ " error: " ++ show err)
+                pure ()
               Right h => do
                 ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
                 ignore $ coreLift $ closeFile h
+                coreLift_ $ putStrLn ("[debug] wrote repl output (doc) line to: " ++ f)
  --                                                    ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
