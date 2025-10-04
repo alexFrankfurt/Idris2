@@ -1,61 +1,55 @@
 param(
   [Parameter(Mandatory=$true)][string]$Prefix,
   [Parameter(Mandatory=$true)][string]$Version
-)
-
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-Write-Host "[Idris2] Installing to prefix: $Prefix (version $Version)"
-
-# Compute repository root (this script lives in tools/)
-$repoRoot = Split-Path -Parent $PSScriptRoot
-
-# Layout:
-#  - $Prefix/bin/idris2.ps1 and idris2.cmd
-#  - $Prefix/bin/idris2_app/*
-#  - $Prefix/idris2-$Version/{lib,support/c} (support/c installed via CMake separately)
-#  - $Prefix/idris2-$Version/<lib>-$Version (ttc files)
-
-$binDir = Join-Path $Prefix 'bin'
-$appDir = Join-Path $binDir 'idris2_app'
-${libRoot} = Join-Path $Prefix ("idris2-" + $Version)
-Write-Host "[Idris2] Ensuring directories: $binDir, $appDir"
-New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-New-Item -ItemType Directory -Force -Path $appDir | Out-Null
-
-############################################
-# Create launcher (installed, self-contained)
-############################################
-$launcherPath = Join-Path $binDir 'idris2.ps1'
-$launcherContent = @"
-`$ErrorActionPreference = 'Stop'
-`$app = Join-Path `$PSScriptRoot 'idris2_app'
+$launcherContent = @'
+$ErrorActionPreference = "Stop"
+$app = Join-Path $PSScriptRoot 'idris2_app'
 # Rely on Idris to create build and ttc directories on demand
-`$env:PATH = "`$app\lib;`$app;`$env:PATH"
-`$env:LD_LIBRARY_PATH = "`$app\lib;`$app;`$env:LD_LIBRARY_PATH"
-`$env:DYLD_LIBRARY_PATH = "`$app\lib;`$app;`$env:DYLD_LIBRARY_PATH"
-`$env:IDRIS2_LIB_DIR = "${libRoot}"
-`$env:IDRIS2_PREFIX = "${Prefix}"
-`$env:IDRIS2_DATA = (Join-Path "${libRoot}" 'support')
-`$env:RACKET = "racket"
-`$env:RACKET_RACO = "raco"
-`# Support --repl-output <file> to tee REPL output to a file
-`$argList = New-Object System.Collections.Generic.List[string]
-`$argList.AddRange([string[]]`$args)
+$env:PATH = "$app\lib;$app;$env:PATH"
+$env:LD_LIBRARY_PATH = "$app\lib;$app;$env:LD_LIBRARY_PATH"
+$env:DYLD_LIBRARY_PATH = "$app\lib;$app;$env:DYLD_LIBRARY_PATH"
+$env:IDRIS2_LIB_DIR = "__LIB_ROOT__"
+$env:IDRIS2_PREFIX = "__PREFIX__"
+$env:IDRIS2_DATA = (Join-Path "__LIB_ROOT__" 'support')
+$env:RACKET = "racket"
+$env:RACKET_RACO = "raco"
+
+# Parse only --repl-input (REPL output redirection handled internally)
+$argList = New-Object System.Collections.Generic.List[string]
+$argList.AddRange([string[]]$args)
+$replInput = $null
+$i = 0
+while ($i -lt $argList.Count) {
+  $a = $argList[$i]
+  if ($a -eq '--repl-input' -and ($i + 1) -lt $argList.Count) {
+    $replInput = $argList[$i + 1]
+    $argList.RemoveAt($i); $argList.RemoveAt($i)
+    continue
+  }
+  if ($a -like '--repl-input=*') {
+    $replInput = $a.Substring($a.IndexOf('=') + 1)
+    $argList.RemoveAt($i)
+    continue
+  }
+  $i++
+}
+
+# Prefer final self-hosted idris2.exe if present, else fall back to bootstrap
+$exe = Join-Path $app 'idris2.exe'
+if (-not (Test-Path $exe)) { $exe = Join-Path $app 'idris2-boot.exe' }
+if ($replInput) {
+  Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -Wait -RedirectStandardInput $replInput | Out-Null
+} else {
+  & $exe @argList
+}
+'@
+
+# Substitute prefix placeholders (avoid escaping storm inside here-string)
+$launcherContent = $launcherContent.Replace('__LIB_ROOT__', $libRoot).Replace('__PREFIX__', $Prefix)
 `$replInput = $null
 `$i = 0
 `while (`$i -lt `$argList.Count) {
 `  `$a = `$argList[`$i]
-`  if (`$a -eq '--repl-output' -and (`$i + 1) -lt `$argList.Count) {
-`    `$env:IDRIS2_REPL_OUTPUT = `$argList[`$i + 1]
-`    `$argList.RemoveAt(`$i); `$argList.RemoveAt(`$i)
-`    continue
-`  }
-`  if (`$a -like '--repl-output=*') {
-`    `$env:IDRIS2_REPL_OUTPUT = `$a.Substring(`$a.IndexOf('=') + 1)
-`    `$argList.RemoveAt(`$i)
-`    continue
-`  }
 `  if (`$a -eq '--repl-input' -and (`$i + 1) -lt `$argList.Count) {
 `    `$replInput = `$argList[`$i + 1]
 `    `$argList.RemoveAt(`$i); `$argList.RemoveAt(`$i)
@@ -68,36 +62,15 @@ $launcherContent = @"
 `  }
 `  `$i++
 `}
-`$exe = Join-Path `$app 'idris2-boot.exe'
+`# Prefer final self-hosted idris2.exe if present, else fall back to bootstrap
+`$exe = Join-Path `$app 'idris2.exe'
+`if (-not (Test-Path `$exe)) { `$exe = Join-Path `$app 'idris2-boot.exe' }
 `if (`$replInput) {
 `  Start-Process -FilePath `$exe -ArgumentList `$argList -NoNewWindow -Wait -RedirectStandardInput `$replInput | Out-Null
 `}
 `else {
 `  & `$exe @argList
 `}
-"@
-Write-Host "[Idris2] Writing launcher to: $launcherPath"
-$launcherContent | Out-File -FilePath $launcherPath -Encoding ASCII -Force
-
-# Create idris2.cmd shim for convenience
-$idrisCmd = @"
-@echo off
-setlocal
-set SCRIPT_DIR=%~dp0
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%idris2.ps1" %*
-"@
-$idrisCmd | Out-File -FilePath (Join-Path $binDir 'idris2.cmd') -Encoding ASCII -Force
-
-############################################
-# Build an installed idris2-boot.exe targeting the install prefix
-############################################
-# Generate idris2-boot.rkt from template, replacing __PREFIX__ with install prefix
-$template = Join-Path $repoRoot 'bootstrap/idris2_app/idris2.rkt'
-if (-not (Test-Path $template)) { throw "Template not found: $template" }
-$prefixForRacket = ($Prefix -replace '\\','/')
-$outRkt  = Join-Path $appDir 'idris2-boot.rkt'
-Write-Host "[Idris2] Generating Racket bootstrap with prefix: $prefixForRacket"
-(Get-Content -Raw $template).Replace('__PREFIX__', $prefixForRacket) | Set-Content -Encoding ASCII -Path $outRkt
 
 # Copy support DLL into installed app dir
 $dllCandidates = @(
@@ -124,6 +97,18 @@ try {
 finally {
   Pop-Location
 }
+
+  # Copy final stage idris2.exe / idris2.rkt from build tree if available
+  $finalExeSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.exe'
+  if (Test-Path $finalExeSrc) {
+    Write-Host "[Idris2] Installing final idris2.exe -> $appDir"
+    Copy-Item -Force $finalExeSrc (Join-Path $appDir 'idris2.exe')
+  }
+  $finalRktSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.rkt'
+  if (Test-Path $finalRktSrc) {
+    Write-Host "[Idris2] Installing final idris2.rkt -> $appDir"
+    Copy-Item -Force $finalRktSrc (Join-Path $appDir 'idris2.rkt')
+  }
 
 # Install Racket backend support files (required for Racket codegen at runtime)
 $destRoot = $libRoot

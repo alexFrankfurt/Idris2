@@ -56,12 +56,7 @@ schHeader = fromString """
     (extended-bindings)
     (not safe)
     (optimize-dead-definitions))
-
-  ;; Check for REPL output redirection
-  (let ((repl-output (getenv "IDRIS2_REPL_OUTPUT")))
-    (when repl-output
-      (current-output-port (open-output-file repl-output 'append))))
-
+  
   """
 
 showGambitChar : Char -> Builder -> Builder
