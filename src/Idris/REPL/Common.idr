@@ -79,7 +79,18 @@ printWithStatus render msg status
 export
 printResult : {auto o : Ref ROpts REPLOpts} ->
               Doc IdrisAnn -> Core ()
-printResult x = printWithStatus render x MsgStatusNone
+printResult x = do
+  printWithStatus render x MsgStatusNone
+  opts <- get ROpts
+  case replOutput opts of
+       Nothing => pure ()
+       Just f => do
+         res <- coreLift $ openFile f Append
+         case res of
+              Left _ => pure () -- silently ignore file errors
+              Right h => do
+                ignore $ coreLift $ fPutStrLn h !(render x)
+                ignore $ coreLift $ closeFile h
  --                                      ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -87,7 +98,18 @@ printResult x = printWithStatus render x MsgStatusNone
 export
 printDocResult : {auto o : Ref ROpts REPLOpts} ->
                  Doc IdrisDocAnn -> Core ()
-printDocResult x = printWithStatus (render styleAnn) x MsgStatusNone
+printDocResult x = do
+  printWithStatus (render styleAnn) x MsgStatusNone
+  opts <- get ROpts
+  case replOutput opts of
+       Nothing => pure ()
+       Just f => do
+         res <- coreLift $ openFile f Append
+         case res of
+              Left _ => pure ()
+              Right h => do
+                ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
+                ignore $ coreLift $ closeFile h
  --                                                    ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 

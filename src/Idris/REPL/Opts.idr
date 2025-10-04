@@ -56,6 +56,7 @@ record REPLOpts where
   color : Bool
   synHighlightOn : Bool
   replInput : Maybe String
+  replOutput : Maybe String
 
 litStyle : Maybe String -> Maybe LiterateStyle
 litStyle = join . map isLitFile
@@ -82,7 +83,8 @@ defaultOpts fname outmode cgs
         , consoleWidth = Nothing
         , color = True
         , synHighlightOn = True
-        , replInput = Nothing
+  , replInput = Nothing
+  , replOutput = Nothing
         }
   where
     litStyle : Maybe String -> Maybe LiterateStyle
