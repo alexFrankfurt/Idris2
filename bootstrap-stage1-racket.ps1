@@ -25,7 +25,7 @@ $outRkt  = Join-Path $bootDir 'idris2_app/idris2-boot.rkt'
 $prefixForRacket = ($bootDir -replace '\\','/')
 (Get-Content -Raw $template).Replace('__PREFIX__', $prefixForRacket) | Set-Content -Encoding ASCII -Path $outRkt
 
-# Find and copy libidris2_support.dll into bootstrap-build/idris2_app
+# Find and copy libidris2_support.dll into bootstrap-build/idris2_app/lib to avoid later overwrite races
 $dllCandidates = @(
   (Join-Path $repoRoot "build-cmake/support/c/$Config/libidris2_support.dll"),
   (Join-Path $repoRoot "support/c/build/$Config/libidris2_support.dll")
@@ -35,7 +35,8 @@ foreach ($dll in $dllCandidates) { if (Test-Path $dll) { $foundDll = $dll; break
 if (-not $foundDll) {
   throw "libidris2_support.dll not found. Expected at: `n - $($dllCandidates -join "`n - ")`nBuild the C support library first (cmake --build build-cmake --config $Config)."
 }
-Copy-Item -Force $foundDll (Join-Path $bootDir 'idris2_app')
+New-Item -ItemType Directory -Force -Path (Join-Path $bootDir 'idris2_app/lib') | Out-Null
+Copy-Item -Force $foundDll (Join-Path $bootDir 'idris2_app/lib')
 
 # Ensure the folder with the DLL is on PATH so Racket FFI can resolve it during raco exe
 $dllDir = Split-Path -Parent $foundDll
@@ -70,10 +71,20 @@ $bootAppDir = Join-Path $bootDir 'idris2_app'
 $launcherContent = @"
 `$ErrorActionPreference = 'Stop'
 `$app = "$bootAppDir"
-`$env:PATH = "`$app;`$env:PATH"
-`$env:LD_LIBRARY_PATH = "`$app;`$env:LD_LIBRARY_PATH"
-`$env:DYLD_LIBRARY_PATH = "`$app;`$env:DYLD_LIBRARY_PATH"
-& (Join-Path `$app 'idris2-boot.exe') @args
+`$env:PATH = "`$app/lib;`$app;`$env:PATH"
+`$env:LD_LIBRARY_PATH = "`$app/lib;`$app;`$env:LD_LIBRARY_PATH"
+`$env:DYLD_LIBRARY_PATH = "`$app/lib;`$app;`$env:DYLD_LIBRARY_PATH"
+`$exe = Join-Path `$app 'idris2-boot.exe'
+`$rkt = Join-Path `$app 'idris2-boot.rkt'
+if (Test-Path `$exe) {
+  Write-Host '[idris2.ps1 bootstrap] Using compiled idris2-boot.exe'
+  & `$exe @args
+} elseif (Test-Path `$rkt) {
+  Write-Warning '[idris2.ps1 bootstrap] idris2-boot.exe missing, falling back to racket'
+  racket `$rkt @args
+} else {
+  Write-Error 'Neither idris2-boot.exe nor idris2-boot.rkt found.'
+}
 "@
 $launcherContent | Out-File -FilePath $launcher -Encoding ASCII -Force
 

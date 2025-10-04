@@ -62,22 +62,42 @@ $yprefix = "$bootstrapPrefix"
 ) | Set-Content -Encoding ASCII -Path $pathsIdr
 
 # Build the Idris2 executable and libraries roughly like 'make all'
-# 1) Ensure the app folder has the fresh support DLL
+# 1) Ensure the app folder exists; prefer reusing DLL from bootstrap stage (now placed under bootstrap-build/idris2_app/lib)
 $targetDir = Join-Path $repoRoot 'build/exec/idris2_app'
 New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 $libDir = Join-Path $targetDir 'lib'
 New-Item -ItemType Directory -Force -Path $libDir | Out-Null
-$builtDll = Join-Path (Join-Path $repoRoot "build-cmake/support/c/$Config") 'libidris2_support.dll'
-if (-not (Test-Path $builtDll)) {
-  $builtDll = Join-Path $supportBld "$Config/libidris2_support.dll"
-}
-if (Test-Path $builtDll) { 
-  $destDll = Join-Path $libDir 'libidris2_support.dll'
-  # Kill any lingering idris2-boot processes that might lock the DLL
-  Get-Process idris2-boot -ErrorAction SilentlyContinue | Stop-Process -Force
-  if (Test-Path $destDll) { Remove-Item -Force $destDll }
-  Copy-Item -Force $builtDll $libDir
-  Write-Host "Copied DLL to $libDir"
+# If a DLL already exists under bootstrap-build/idris2_app/lib, just ensure PATH picks it up.
+$bootstrapDll = Join-Path $bootstrapPrefix 'idris2_app/lib/libidris2_support.dll'
+if (Test-Path $bootstrapDll) {
+  Write-Host '[bootstrap-stage2] Reusing bootstrap support DLL.'
+  if (-not ($env:PATH -split ';' | Where-Object { $_ -eq (Split-Path -Parent $bootstrapDll) })) {
+    $env:PATH = (Split-Path -Parent $bootstrapDll) + ';' + $env:PATH
+  }
+  # If a duplicate root-level DLL exists, remove it to avoid the runtime preferring the root path and to reduce race surface
+  $rootDup = Join-Path $targetDir 'libidris2_support.dll'
+  if (Test-Path $rootDup) {
+    try {
+      Remove-Item -Force $rootDup -ErrorAction Stop
+      Write-Host '[bootstrap-stage2] Removed duplicate root-level support DLL.'
+    } catch {
+      Write-Warning "[bootstrap-stage2] Could not remove duplicate root DLL: $($_.Exception.Message)"
+    }
+  }
+} else {
+  # Fallback: locate a built DLL and copy only if we do not already have one in target lib
+  $builtDll = Join-Path (Join-Path $repoRoot "build-cmake/support/c/$Config") 'libidris2_support.dll'
+  if (-not (Test-Path $builtDll)) { $builtDll = Join-Path $supportBld "$Config/libidris2_support.dll" }
+  if (Test-Path $builtDll) {
+    $destDll = Join-Path $libDir 'libidris2_support.dll'
+    if (-not (Test-Path $destDll)) {
+      try { Copy-Item -Force $builtDll $libDir -ErrorAction Stop; Write-Host '[bootstrap-stage2] Copied support DLL to target lib.' } catch { Write-Warning "[bootstrap-stage2] Failed to copy support DLL: $($_.Exception.Message)" }
+    } else {
+      Write-Host '[bootstrap-stage2] Target support DLL already present; not copying.'
+    }
+  } else {
+    Write-Warning '[bootstrap-stage2] No support DLL found to reuse or copy.'
+  }
 }
 
 # Update the launcher to point to the final app dir instead of bootstrap-build
@@ -94,7 +114,17 @@ $launcherContent = @"
 # Ensure runtime finds installed libs and support data by default
 `$env:IDRIS2_PREFIX = `$bootstrapPrefix
 `$env:IDRIS2_DATA = (Join-Path `$versionedPrefix 'support')
-& (Join-Path `$app 'idris2-boot.exe') @args
+`$exe = Join-Path `$app 'idris2-boot.exe'
+`$rkt = Join-Path `$app 'idris2-boot.rkt'
+if (Test-Path `$exe) {
+  Write-Host '[idris2.ps1 stage2] Using compiled idris2-boot.exe'
+  & `$exe @args
+} elseif (Test-Path `$rkt) {
+  Write-Warning '[idris2.ps1 stage2] idris2-boot.exe missing, falling back to racket'
+  racket `$rkt @args
+} else {
+  Write-Error 'Neither idris2-boot.exe nor idris2-boot.rkt found.'
+}
 "@
 $launcherContent | Set-Content -Encoding ASCII -Path $launcher
 
@@ -207,6 +237,15 @@ foreach ($lib in $libsForIdris2) {
 
 # 3) Build Idris2 app
 Write-Host "Building idris2"
+Write-Host '[bootstrap-stage2][diag] DLL state before app build:'
+Get-Item -ErrorAction SilentlyContinue `
+  (Join-Path $targetDir 'libidris2_support.dll'), `
+  (Join-Path $libDir 'libidris2_support.dll'), `
+  $bootstrapDll | ForEach-Object {
+    if ($_){
+      Write-Host ("[bootstrap-stage2][diag] {0} {1} bytes {2}" -f $_.FullName,$_.Length,$_.LastWriteTime)
+    }
+  }
 Ensure-AppTTCDirs
 & $env:IDRIS2_BOOT --build (Join-Path $repoRoot 'idris2.ipkg') 2>&1 | Out-Host
 

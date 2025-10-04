@@ -73,6 +73,8 @@ Set-Content -Encoding UTF8 -Force -Path $launcherPath -Value $launcherContent
 Write-Host "[Idris2] Launcher written: $launcherPath"
 
 # Copy support DLL into installed app dir
+# On Windows the DLL may already be loaded/locked if an earlier build invoked idris2-boot
+# so we try a safe copy strategy: if direct overwrite fails, copy to a temp name and schedule rename.
 $dllCandidates = @(
   (Join-Path $repoRoot 'build-cmake/support/c/Release/libidris2_support.dll'),
   (Join-Path $repoRoot 'support/c/build/Release/libidris2_support.dll')
@@ -80,10 +82,41 @@ $dllCandidates = @(
 $copied = $false
 foreach ($dll in $dllCandidates) {
   if (Test-Path $dll) {
-    Write-Host "[Idris2] Copying support DLL: $dll -> $appDir"
-    Copy-Item -Force $dll $appDir
-    $copied = $true
-    break
+    $target = Join-Path $appDir 'libidris2_support.dll'
+    try {
+      Write-Host "[Idris2] Copying support DLL: $dll -> $target"
+      Copy-Item -Force $dll $target -ErrorAction Stop
+      $copied = $true
+      break
+    }
+    catch {
+      Write-Warning "[Idris2] Direct copy failed (likely locked): $($_.Exception.Message)"
+      $tempTarget = Join-Path $appDir ('libidris2_support.new.' + [guid]::NewGuid().ToString() + '.dll')
+      try {
+        Copy-Item $dll $tempTarget -ErrorAction Stop
+        Write-Host "[Idris2] Copied support DLL to temp file: $tempTarget"
+        # Attempt an in-place rename swap if original not writable
+        try {
+          if (Test-Path $target) { Rename-Item -Path $target -NewName ('libidris2_support.old.' + [guid]::NewGuid().ToString() + '.dll') -ErrorAction SilentlyContinue }
+          Rename-Item -Path $tempTarget -NewName 'libidris2_support.dll' -ErrorAction SilentlyContinue
+          if (Test-Path $target) {
+            Write-Host '[Idris2] Support DLL updated via rename swap.'
+            $copied = $true
+            break
+          } else {
+            Write-Warning '[Idris2] Could not replace in-use support DLL; leaving temp copy.'
+            $copied = $true
+            break
+          }
+        }
+        catch {
+          Write-Warning "[Idris2] Rename swap failed: $($_.Exception.Message)"
+        }
+      }
+      catch {
+        Write-Warning "[Idris2] Failed to copy support DLL even to temp name: $($_.Exception.Message)"
+      }
+    }
   }
 }
 if (-not $copied) { Write-Warning '[Idris2] libidris2_support.dll not found in expected locations; idris may fail at runtime.' }
