@@ -79,6 +79,7 @@ import Data.List
 import Data.List1
 import Data.String
 import Data.String.Extra
+import Data.Char -- for toUpper, isAlpha
 
 import System
 import System.Clock
@@ -294,19 +295,43 @@ runTest opts testPath = do
         _ =>
           p
 
+    -- Convert msys/cygwin style paths (/d/dir/... or /cygdrive/d/dir/...) to
+    -- Windows drive paths (d:/dir/...). Keep forward slashes: they are
+    -- accepted by Windows APIs and avoid backslash escaping headaches.
+    convertMsysPath : String -> String
+    convertMsysPath p =
+      case unpack p of
+        '/' :: d :: '/' :: rest =>
+          if isAlpha d then pack (toLower d :: ':' :: '/' :: rest) else p
+        '/' :: 'c' :: 'y' :: 'g' :: 'd' :: 'r' :: 'i' :: 'v' :: 'e' :: '/' :: d :: '/' :: rest =>
+          if isAlpha d then pack (toLower d :: ':' :: '/' :: rest) else p
+        _ => p
+
+    stripQuotes : String -> String
+    stripQuotes s =
+      if (length s > 1) && ((head s == '"' && last s == '"') || (head s == '\'' && last s == '\''))
+         then substr 1 (length s - 2) s
+         else s
+
 
     windowsLauncher : String
     windowsLauncher =
-      let raw = exeUnderTest opts
-          l   = normalizePath raw
+      let raw0 = exeUnderTest opts
+          raw1 = stripQuotes raw0
+          raw2 = convertMsysPath raw1
+          l    = normalizePath raw2
       in if ".ps1" `isSuffixOf` l then
+           -- PowerShell script launcher
            "pwsh -NoProfile -ExecutionPolicy Bypass -File " ++ escapeArg l
-         else l
+         else
+           -- Plain executable path, escape as single argument
+           escapeArg l
 
     dbgWindowsLauncher : IO ()
     dbgWindowsLauncher = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       when (isJust dbg) $ putStrLn ("[golden] windowsLauncher=" ++ windowsLauncher)
+      when (isJust dbg) $ putStrLn ("[golden] exe raw=" ++ exeUnderTest opts)
 
     -- Core Idris invocation using --repl-input/--repl-output
     runIdris : Int -> String -> Maybe String -> IO String
@@ -317,7 +342,10 @@ runTest opts testPath = do
             case ws of
               (w :: rest) => if w == "idris2" then unwords rest else rawArgs
               _ => rawArgs
-      let relOut = "output" -- ALWAYS write the final output here for golden compare
+      -- Always direct output (either REPL transcript or fallback) to the shared
+      -- golden comparison file named `output` so that subsequent logic only
+      -- has to read a single file, regardless of intermediate tmp usage.
+      let relOut = "output"
       let outFile = testPath ++ "/" ++ relOut
       let relIn : Maybe String = case minput of
                                    Nothing => Nothing
@@ -344,7 +372,7 @@ runTest opts testPath = do
       when (isJust dbg) $ putStrLn ("[golden] runIdris primary out length=" ++ show (length out1) ++ if fallbackNeeded then " (fallback)" else "")
       if fallbackNeeded then do
            let Just rin = relIn | Nothing => pure out1
-           ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
+        ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
                               " --no-banner --console-width 0 --no-color " ++ argsAfter ++
                               " < " ++ escapeArg rin ++ " 2>&1 > " ++ escapeArg relOut
            Right out2 <- readFile outFile | Left _ => pure out1
@@ -401,7 +429,7 @@ runTest opts testPath = do
     runExec idx file = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
+  let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
       when (isJust dbg) $ putStrLn ("[golden] runExec idx=" ++ show idx ++ " file=" ++ file)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""
@@ -411,7 +439,7 @@ runTest opts testPath = do
     runCheck idx file = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
+  let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
       when (isJust dbg) $ putStrLn ("[golden] runCheck idx=" ++ show idx ++ " file=" ++ file)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""

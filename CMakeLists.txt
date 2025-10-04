@@ -79,6 +79,14 @@ if (WIN32)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     VERBATIM
   )
+  # Run only the fundamental language feature tests (idris2/basic) using the
+  # substring filter supported by the test harness' --only flag.
+  add_custom_target(test-basic
+    COMMAND pwsh.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_SOURCE_DIR}/tools/run-tests.ps1" -Config $<CONFIG> -Only idris2/basic
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    VERBATIM
+  )
   # Windows-only: example PowerShell test runner for a single test folder
   add_custom_target(test-basic001
     COMMAND pwsh.exe -NoProfile -ExecutionPolicy Bypass
