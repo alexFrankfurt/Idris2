@@ -1,6 +1,26 @@
 param(
   [Parameter(Mandatory=$true)][string]$Prefix,
   [Parameter(Mandatory=$true)][string]$Version
+)
+
+$ErrorActionPreference = 'Stop'
+
+# Resolve repository root (script lives in tools/)
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# Layout paths
+$binDir  = Join-Path $Prefix 'bin'
+$appDir  = Join-Path $binDir 'idris2_app'
+$libDir  = Join-Path $Prefix 'lib'
+$libRoot = Join-Path $libDir ("idris2-" + $Version)
+
+# Ensure destination directories exist
+New-Item -ItemType Directory -Force -Path $Prefix  | Out-Null
+New-Item -ItemType Directory -Force -Path $binDir  | Out-Null
+New-Item -ItemType Directory -Force -Path $appDir  | Out-Null
+New-Item -ItemType Directory -Force -Path $libDir  | Out-Null
+
+# Generate launcher content (filled with placeholders for later substitution)
 $launcherContent = @'
 $ErrorActionPreference = "Stop"
 $app = Join-Path $PSScriptRoot 'idris2_app'
@@ -46,31 +66,11 @@ if ($replInput) {
 
 # Substitute prefix placeholders (avoid escaping storm inside here-string)
 $launcherContent = $launcherContent.Replace('__LIB_ROOT__', $libRoot).Replace('__PREFIX__', $Prefix)
-`$replInput = $null
-`$i = 0
-`while (`$i -lt `$argList.Count) {
-`  `$a = `$argList[`$i]
-`  if (`$a -eq '--repl-input' -and (`$i + 1) -lt `$argList.Count) {
-`    `$replInput = `$argList[`$i + 1]
-`    `$argList.RemoveAt(`$i); `$argList.RemoveAt(`$i)
-`    continue
-`  }
-`  if (`$a -like '--repl-input=*') {
-`    `$replInput = `$a.Substring(`$a.IndexOf('=') + 1)
-`    `$argList.RemoveAt(`$i)
-`    continue
-`  }
-`  `$i++
-`}
-`# Prefer final self-hosted idris2.exe if present, else fall back to bootstrap
-`$exe = Join-Path `$app 'idris2.exe'
-`if (-not (Test-Path `$exe)) { `$exe = Join-Path `$app 'idris2-boot.exe' }
-`if (`$replInput) {
-`  Start-Process -FilePath `$exe -ArgumentList `$argList -NoNewWindow -Wait -RedirectStandardInput `$replInput | Out-Null
-`}
-`else {
-`  & `$exe @argList
-`}
+
+# Write launcher script
+$launcherPath = Join-Path $binDir 'idris2.ps1'
+Set-Content -Encoding UTF8 -Force -Path $launcherPath -Value $launcherContent
+Write-Host "[Idris2] Launcher written: $launcherPath"
 
 # Copy support DLL into installed app dir
 $dllCandidates = @(
@@ -88,23 +88,48 @@ foreach ($dll in $dllCandidates) {
 }
 if (-not $copied) { Write-Warning '[Idris2] libidris2_support.dll not found in expected locations; idris may fail at runtime.' }
 
-# Build the executable with raco into the installed app directory
-Push-Location $appDir
-try {
-  Write-Host "[Idris2] Building idris2-boot.exe (raco exe)..."
-  raco exe 'idris2-boot.rkt'
+<#
+ Build the bootstrap executable with Racket if the source exists.
+ We expect idris2-boot.rkt to have been produced by the build in one of the
+ candidate build trees. Copy it first, then run raco which will emit idris2-boot.exe.
+#>
+
+$bootRktCandidates = @(
+  (Join-Path $repoRoot 'build-cmake\exec\idris2_app\idris2-boot.rkt'),
+  (Join-Path $repoRoot 'build\exec\idris2_app\idris2-boot.rkt')
+)
+foreach ($c in $bootRktCandidates) {
+  if (Test-Path $c) {
+    Copy-Item -Force $c (Join-Path $appDir 'idris2-boot.rkt')
+    break
+  }
 }
-finally {
-  Pop-Location
+if (Test-Path (Join-Path $appDir 'idris2-boot.rkt')) {
+  Push-Location $appDir
+  try {
+    Write-Host "[Idris2] Building idris2-boot.exe (raco exe)..."
+    raco exe 'idris2-boot.rkt'
+  }
+  finally {
+    Pop-Location
+  }
+} else {
+  Write-Warning '[Idris2] idris2-boot.rkt not found; skipping raco exe build.'
 }
 
   # Copy final stage idris2.exe / idris2.rkt from build tree if available
-  $finalExeSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.exe'
+  $finalExeSrc = Join-Path $repoRoot 'build-cmake\exec\idris2_app\idris2.exe'
+  if (-not (Test-Path $finalExeSrc)) {
+    $finalExeSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.exe'
+  }
   if (Test-Path $finalExeSrc) {
     Write-Host "[Idris2] Installing final idris2.exe -> $appDir"
     Copy-Item -Force $finalExeSrc (Join-Path $appDir 'idris2.exe')
   }
-  $finalRktSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.rkt'
+  $finalRktSrc = Join-Path $repoRoot 'build-cmake\exec\idris2_app\idris2.rkt'
+  if (-not (Test-Path $finalRktSrc)) {
+    $finalRktSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.rkt'
+  }
   if (Test-Path $finalRktSrc) {
     Write-Host "[Idris2] Installing final idris2.rkt -> $appDir"
     Copy-Item -Force $finalRktSrc (Join-Path $appDir 'idris2.rkt')
