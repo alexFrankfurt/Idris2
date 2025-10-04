@@ -310,9 +310,19 @@ runTest opts testPath = do
 
     stripQuotes : String -> String
     stripQuotes s =
-      if (length s > 1) && ((head s == '"' && last s == '"') || (head s == '\'' && last s == '\''))
-         then substr 1 (length s - 2) s
-         else s
+      let chars = unpack s in
+        case chars of
+          '"' :: rest =>
+            case reverse rest of
+              '"' :: innerRev => pack (reverse innerRev)
+              _ => s
+          '\'' :: rest =>
+            case reverse rest of
+              '\'' :: innerRev => pack (reverse innerRev)
+              _ => s
+          _ => s
+
+
 
 
     windowsLauncher : String
@@ -373,7 +383,7 @@ runTest opts testPath = do
       when (isJust dbg) $ putStrLn ("[golden] runIdris primary out length=" ++ show (length out1) ++ if fallbackNeeded then " (fallback)" else "")
       if fallbackNeeded then do
            let Just rin = relIn | Nothing => pure out1
-        ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
+           ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
                               " --no-banner --console-width 0 --no-color " ++ argsAfter ++
                               " < " ++ escapeArg rin ++ " 2>&1 > " ++ escapeArg relOut
            Right out2 <- readFile outFile | Left _ => pure out1
@@ -416,7 +426,7 @@ runTest opts testPath = do
     runRedirect : Int -> String -> IO String
     runRedirect idx line = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
-      when (isJust dbg) $ putStrLn ("[golden] runRedirect idx=" ++ show idx ++ " line=" ++ line)
+      when (isJust dbg) $ putStrLn ("[golden] runRedirect777 idx=" ++ show idx ++ " line=" ++ line)
       case break (== '<') (unpack line) of
         (before, '<' :: after) =>
           let argsLine = trim (pack before)
@@ -430,7 +440,7 @@ runTest opts testPath = do
     runExec idx file = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-  let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
       when (isJust dbg) $ putStrLn ("[golden] runExec idx=" ++ show idx ++ " file=" ++ file)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""
@@ -440,7 +450,7 @@ runTest opts testPath = do
     runCheck idx file = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-  let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
       when (isJust dbg) $ putStrLn ("[golden] runCheck idx=" ++ show idx ++ " file=" ++ file)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""
