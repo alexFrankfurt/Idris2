@@ -303,6 +303,11 @@ runTest opts testPath = do
            "pwsh -NoProfile -ExecutionPolicy Bypass -File " ++ escapeArg l
          else l
 
+    dbgWindowsLauncher : IO ()
+    dbgWindowsLauncher = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $ putStrLn ("[golden] windowsLauncher=" ++ windowsLauncher)
+
     -- Core Idris invocation using --repl-input/--repl-output
     runIdris : Int -> String -> Maybe String -> IO String
     runIdris idx rawArgs minput = do
@@ -312,7 +317,7 @@ runTest opts testPath = do
             case ws of
               (w :: rest) => if w == "idris2" then unwords rest else rawArgs
               _ => rawArgs
-      let relOut = "output"
+      let relOut = "output" -- ALWAYS write the final output here for golden compare
       let outFile = testPath ++ "/" ++ relOut
       let relIn : Maybe String = case minput of
                                    Nothing => Nothing
@@ -320,6 +325,7 @@ runTest opts testPath = do
                                                then Just (drop (length testPath + 1) p)
                                                else Just p
       when (isJust dbg) $ putStrLn ("[golden] runIdris idx=" ++ show idx ++ " args=" ++ argsAfter ++ maybe "" (\i => " input=" ++ i) relIn)
+      dbgWindowsLauncher
       case relIn of
         Nothing => do
           let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
@@ -380,7 +386,8 @@ runTest opts testPath = do
 
     runRedirect : Int -> String -> IO String
     runRedirect idx line = do
-      putStrLn ("[golden] runRedirect idx=" ++ show idx ++ " line=" ++ line)
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $ putStrLn ("[golden] runRedirect idx=" ++ show idx ++ " line=" ++ line)
       case break (== '<') (unpack line) of
         (before, '<' :: after) =>
           let argsLine = trim (pack before)

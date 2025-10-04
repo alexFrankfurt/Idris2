@@ -96,7 +96,15 @@ function Convert-ToPosixPath([string]$p) {
       # Where to install new stuff
       $env:IDRIS2_PREFIX = $testsPrefix
       # Where to look
-      $env:IDRIS2_PACKAGE_PATH = "$oldPP;$newPP"
+      # IMPORTANT: include the repo 'libs' directory FIRST so freshly built packages
+      # (notably the 'test' package containing updated Test.Golden) shadow any
+      # previously installed copies under the bootstrap/prefix locations.
+      if ($repoLibs) {
+        $env:IDRIS2_PACKAGE_PATH = "$repoLibs;$oldPP;$newPP"
+      } else {
+        $env:IDRIS2_PACKAGE_PATH = "$oldPP;$newPP"
+      }
+      Write-Host "[Tests] IDRIS2_PACKAGE_PATH=$($env:IDRIS2_PACKAGE_PATH)"
       # Support and libs
       if ($env:TEST_IDRIS2_LIBS) {
         $env:IDRIS2_LIBS = "$oldPP/lib;$newPP/lib;$env:TEST_IDRIS2_LIBS"
