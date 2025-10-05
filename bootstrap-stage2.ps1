@@ -62,22 +62,42 @@ $yprefix = "$bootstrapPrefix"
 ) | Set-Content -Encoding ASCII -Path $pathsIdr
 
 # Build the Idris2 executable and libraries roughly like 'make all'
-# 1) Ensure the app folder has the fresh support DLL
+# 1) Ensure the app folder exists; prefer reusing DLL from bootstrap stage (now placed under bootstrap-build/idris2_app/lib)
 $targetDir = Join-Path $repoRoot 'build/exec/idris2_app'
 New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 $libDir = Join-Path $targetDir 'lib'
 New-Item -ItemType Directory -Force -Path $libDir | Out-Null
-$builtDll = Join-Path (Join-Path $repoRoot "build-cmake/support/c/$Config") 'libidris2_support.dll'
-if (-not (Test-Path $builtDll)) {
-  $builtDll = Join-Path $supportBld "$Config/libidris2_support.dll"
-}
-if (Test-Path $builtDll) { 
-  $destDll = Join-Path $libDir 'libidris2_support.dll'
-  # Kill any lingering idris2-boot processes that might lock the DLL
-  Get-Process idris2-boot -ErrorAction SilentlyContinue | Stop-Process -Force
-  if (Test-Path $destDll) { Remove-Item -Force $destDll }
-  Copy-Item -Force $builtDll $libDir
-  Write-Host "Copied DLL to $libDir"
+# If a DLL already exists under bootstrap-build/idris2_app/lib, just ensure PATH picks it up.
+$bootstrapDll = Join-Path $bootstrapPrefix 'idris2_app/lib/libidris2_support.dll'
+if (Test-Path $bootstrapDll) {
+  Write-Host '[bootstrap-stage2] Reusing bootstrap support DLL.'
+  if (-not ($env:PATH -split ';' | Where-Object { $_ -eq (Split-Path -Parent $bootstrapDll) })) {
+    $env:PATH = (Split-Path -Parent $bootstrapDll) + ';' + $env:PATH
+  }
+  # If a duplicate root-level DLL exists, remove it to avoid the runtime preferring the root path and to reduce race surface
+  $rootDup = Join-Path $targetDir 'libidris2_support.dll'
+  if (Test-Path $rootDup) {
+    try {
+      Remove-Item -Force $rootDup -ErrorAction Stop
+      Write-Host '[bootstrap-stage2] Removed duplicate root-level support DLL.'
+    } catch {
+      Write-Warning "[bootstrap-stage2] Could not remove duplicate root DLL: $($_.Exception.Message)"
+    }
+  }
+} else {
+  # Fallback: locate a built DLL and copy only if we do not already have one in target lib
+  $builtDll = Join-Path (Join-Path $repoRoot "build-cmake/support/c/$Config") 'libidris2_support.dll'
+  if (-not (Test-Path $builtDll)) { $builtDll = Join-Path $supportBld "$Config/libidris2_support.dll" }
+  if (Test-Path $builtDll) {
+    $destDll = Join-Path $libDir 'libidris2_support.dll'
+    if (-not (Test-Path $destDll)) {
+      try { Copy-Item -Force $builtDll $libDir -ErrorAction Stop; Write-Host '[bootstrap-stage2] Copied support DLL to target lib.' } catch { Write-Warning "[bootstrap-stage2] Failed to copy support DLL: $($_.Exception.Message)" }
+    } else {
+      Write-Host '[bootstrap-stage2] Target support DLL already present; not copying.'
+    }
+  } else {
+    Write-Warning '[bootstrap-stage2] No support DLL found to reuse or copy.'
+  }
 }
 
 # Update the launcher to point to the final app dir instead of bootstrap-build
@@ -94,7 +114,21 @@ $launcherContent = @"
 # Ensure runtime finds installed libs and support data by default
 `$env:IDRIS2_PREFIX = `$bootstrapPrefix
 `$env:IDRIS2_DATA = (Join-Path `$versionedPrefix 'support')
-& (Join-Path `$app 'idris2-boot.exe') @args
+`$final = Join-Path `$app 'idris2.exe'
+`$exe = Join-Path `$app 'idris2-boot.exe'
+`$rkt = Join-Path `$app 'idris2-boot.rkt'
+if (Test-Path `$final) {
+  Write-Host '[idris2.ps1 stage2] Using final idris2.exe'
+  & `$final @args
+} elseif (Test-Path `$exe) {
+  Write-Host '[idris2.ps1 stage2] Using compiled idris2-boot.exe'
+  & `$exe @args
+} elseif (Test-Path `$rkt) {
+  Write-Warning '[idris2.ps1 stage2] idris2-boot.exe missing, falling back to racket'
+  racket `$rkt @args
+} else {
+  Write-Error 'No Idris2 launcher found (expected idris2.exe, idris2-boot.exe, or idris2-boot.rkt).'
+}
 "@
 $launcherContent | Set-Content -Encoding ASCII -Path $launcher
 
@@ -189,38 +223,141 @@ function Ensure-LibTTCDirs {
   }
 }
 
-$libsForIdris2 = @('prelude', 'base', 'linear', 'network', 'contrib')
+$coreLibsForIdris2 = @('prelude', 'base', 'linear', 'network', 'contrib')
 
-foreach ($lib in $libsForIdris2) {
-  # Always build before install to ensure TTCs exist
+foreach ($lib in $coreLibsForIdris2) {
   Ensure-LibTTCDirs $lib
   Build-Lib $lib $env:IDRIS2_BOOT
-  # Ensure install destination exists (Idris may not create it on Windows)
   Ensure-InstallDirs $lib
-  Write-Host "Installing $lib"
+  Write-Host "Installing (bootstrap compiler) $lib"
   $ipkgPath = (Join-Path $repoRoot "libs/$lib/$lib.ipkg")
   & $env:IDRIS2_BOOT --install $ipkgPath 2>&1 | Out-Host
-  # Add library root (not versioned folder) to IDRIS2_PATH
   $installRoot = "$bootstrapPrefix/idris2-0.7.0/$lib-0.7.0"
   $env:IDRIS2_PATH = ($env:IDRIS2_PATH + ";$installRoot").Trim(';')
 }
 
 # 3) Build Idris2 app
 Write-Host "Building idris2"
+Write-Host '[bootstrap-stage2][diag] DLL state before app build:'
+Get-Item -ErrorAction SilentlyContinue `
+  (Join-Path $targetDir 'libidris2_support.dll'), `
+  (Join-Path $libDir 'libidris2_support.dll'), `
+  $bootstrapDll | ForEach-Object {
+    if ($_){
+      Write-Host ("[bootstrap-stage2][diag] {0} {1} bytes {2}" -f $_.FullName,$_.Length,$_.LastWriteTime)
+    }
+  }
 Ensure-AppTTCDirs
 & $env:IDRIS2_BOOT --build (Join-Path $repoRoot 'idris2.ipkg') 2>&1 | Out-Host
 
 $targetExe = Join-Path $repoRoot 'build/exec/idris2.ps1'
 
-# Build and install the rest of the libs
-$restLibs = @('test', 'papers')
+# Attempt to build a final standalone idris2.exe using Racket (Option C)
+$bootRkt = Join-Path $targetDir 'idris2-boot.rkt'
+$finalRkt = Join-Path $targetDir 'idris2.rkt'
+$rktSource = if (Test-Path $finalRkt) { $finalRkt } elseif (Test-Path $bootRkt) { $bootRkt } else { $null }
+if ($rktSource) {
+  $finalExe = Join-Path $targetDir 'idris2.exe'
+  $needsBuild = $true
+  if (Test-Path $finalExe) {
+    try {
+      $exeTime = (Get-Item $finalExe).LastWriteTimeUtc
+      $srcTime = (Get-Item $rktSource).LastWriteTimeUtc
+      if ($exeTime -ge $srcTime) { $needsBuild = $false }
+    } catch {}
+  }
+  if ($needsBuild) {
+    Write-Host ("[bootstrap-stage2] raco exe source: {0}" -f (Split-Path -Leaf $rktSource))
+    try {
+      Push-Location $targetDir
+      raco exe -o idris2 (Split-Path -Leaf $rktSource) 2>&1 | Out-Host
+      Pop-Location
+      if (Test-Path $finalExe) {
+        Write-Host '[bootstrap-stage2] Successfully built/updated final idris2.exe'
+      } else {
+        Write-Warning '[bootstrap-stage2] raco exe finished but idris2.exe not found.'
+      }
+    } catch {
+      Pop-Location -ErrorAction SilentlyContinue
+      Write-Warning ("[bootstrap-stage2] Failed to build final idris2.exe: {0}" -f $_.Exception.Message)
+    }
+  } else {
+    Write-Host '[bootstrap-stage2] idris2.exe is up to date with Racket source; skipping rebuild.'
+  }
+} else {
+  Write-Host '[bootstrap-stage2] Skipping raco exe (no idris2.rkt or idris2-boot.rkt found).'
+}
 
-foreach ($lib in $restLibs) {
+# Rebuild and reinstall ALL libraries with the final compiler (idris2.exe preferred via launcher)
+$allLibs = @('prelude','base','linear','network','contrib','test','papers')
+
+# 3a) Remove any stale build artifacts from bootstrap phase so final rebuild is clean
+Write-Host '[bootstrap-stage2] Cleaning previous library build artifacts'
+foreach ($lib in $allLibs) {
+  $buildDir = Join-Path $repoRoot "libs/$lib/build"
+  if (Test-Path $buildDir) {
+    try {
+      Remove-Item -Recurse -Force $buildDir -ErrorAction Stop
+      Write-Host "[bootstrap-stage2] Removed libs/$lib/build"
+    } catch {
+      Write-Warning "[bootstrap-stage2] Failed to remove libs/$lib/build: $($_.Exception.Message)"
+    }
+  }
+}
+
+# 3b) Re-detect (possibly different) TTC version from final idris2.rkt
+$finalTtcVersion = $ttcVersion
+$finalRktCandidate = Join-Path $targetDir 'idris2.rkt'
+if (Test-Path $finalRktCandidate) {
+  try {
+    $finalTxt = Get-Content -Raw $finalRktCandidate
+    if ($finalTxt -match 'ttcVersion[^0-9]*([0-9]{6,})') {
+      $detected = [int64]$matches[1]
+      if ($detected -ne $ttcVersion) {
+        Write-Host "[bootstrap-stage2] Detected updated TTC version $detected (was $ttcVersion)"
+        $finalTtcVersion = $detected
+      } else {
+        Write-Host "[bootstrap-stage2] TTC version unchanged at $ttcVersion"
+      }
+    } else {
+      Write-Warning '[bootstrap-stage2] Could not parse TTC version from final idris2.rkt; keeping previous value.'
+    }
+  } catch {
+    Write-Warning "[bootstrap-stage2] Failed reading final idris2.rkt for TTC version: $($_.Exception.Message)"
+  }
+}
+
+if ($finalTtcVersion -ne $ttcVersion) {
+  Write-Host "[bootstrap-stage2] Using new TTC version $finalTtcVersion for final library install"
+  $ttcVersion = $finalTtcVersion
+}
+
+# 3c) Prune old TTC version directories in install tree to avoid ambiguity
+$installRootBase = Join-Path $bootstrapPrefix 'idris2-0.7.0'
+foreach ($lib in $allLibs) {
+  $libInstall = Join-Path $installRootBase ("$lib-0.7.0")
+  if (Test-Path $libInstall) {
+    Get-ChildItem -Path $libInstall -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9]{6,}$' -and $_.Name -ne $ttcVersion } | ForEach-Object {
+      try {
+        Remove-Item -Recurse -Force $_.FullName -ErrorAction Stop
+        Write-Host "[bootstrap-stage2] Pruned old TTC dir $($_.FullName)"
+      } catch {
+        Write-Warning "[bootstrap-stage2] Failed to prune old TTC dir $($_.FullName): $($_.Exception.Message)"
+      }
+    }
+  }
+}
+
+Write-Host '[bootstrap-stage2] Rebuilding and reinstalling libraries with final compiler'
+foreach ($lib in $allLibs) {
+  Write-Host "[bootstrap-stage2] (final) rebuilding $lib"
   Ensure-LibTTCDirs $lib
   Build-Lib $lib $targetExe
   $ipkgPath = (Join-Path $repoRoot "libs/$lib/$lib.ipkg")
   Ensure-InstallDirs $lib
-  & $targetExe --install $ipkgPath
+  & $targetExe --install $ipkgPath 2>&1 | Out-Host
 }
+
+Write-Host '[bootstrap-stage2] Library rebuild with final compiler complete'
 
 Write-Host 'bootstrap stage 2 complete'

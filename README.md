@@ -51,13 +51,13 @@ Run these commands in PowerShell (quote all -D args):
 1) Configure (from the repository root)
 
 ```
-cmake -S . -B build-cmake -D "IDRIS2_VERSION=0.7.0" -D "IDRIS2_CG=racket"
+cmake -S . -B build-cmake -D IDRIS2_VERSION=0.7.0
 ```
 
 2) Bootstrap (stage1 + stage2)
 
 ```
-cmake --build build-cmake --config Release -t bootstrap-racket
+cmake --build build-cmake --config Release --target stage2
 ```
 
 3) Install to a prefix (example C:\\Idris2)
@@ -65,7 +65,11 @@ cmake --build build-cmake --config Release -t bootstrap-racket
 ```
 cmake --install build-cmake --config Release --prefix "C:\\Idris2"
 ```
+#### Clean
 
+```
+Remove-Item -Recurse -Force .\build-cmake, .\build, .\bootstrap-build, .\support\c\build
+```
 #### Install Layout
 
 - Binaries and runtime
@@ -107,9 +111,54 @@ If you want, add `C:\\Idris2\\bin` to PATH.
 
 #### Notes
 
-- The launcher pre-creates common output directories (build/ttc, build/exec) in your project.
-- The launcher ensures the runtime DLL is copied into any generated `_app` folders after compile.
+- The launcher now relies on Idris' built-in mkdirAll to create build directories on demand; no pre-creation or DLL copying is performed by the launcher.
+- To run the Idris 2 test suite on Windows via CMake, use the custom test target: build stage2 first, then `cmake --build . --config Release -t test` (from the build folder). You can filter tests by passing `-Only <pattern>` or `-Except <pattern>` via `tools/run-tests.ps1` directly.
 - If you switch versions, re-run configure and install with the new `-D IDRIS2_VERSION=...`.
+
+#### Automated REPL Flags & Golden Test Changes (This Fork)
+
+This Windows-focused fork introduces (or standardizes) several compiler flags and test harness behaviours to make the REPL and golden tests deterministic and CI‑friendly:
+
+New / emphasized flags used by the test harness:
+
+| Flag | Purpose |
+|------|---------|
+| `--repl-input <file>` | Feed a sequence of REPL commands from a file (non-interactive). |
+| `--repl-output <file>` | Capture the REPL session transcript (exact user-visible lines) to a file. |
+| `--width <n>` | Fix output wrapping width to ensure stable formatting in golden outputs. |
+| `--no-color` | Disable ANSI color so golden files are not polluted with escape codes. |
+| `--no-prelude` | (Existing flag) Sometimes used in very small baseline tests; documented here for completeness. |
+
+Example (what the PowerShell test runner effectively does):
+
+```
+& ./build/exec/idris2.ps1 --repl-input test_repl_input.txt --repl-output transcript.txt --width 120 --no-color MyModule.idr
+```
+
+Golden test harness updates:
+
+* Dual expected files: if an `expected_ro` file is present, it is preferred over `expected`. The `_ro` variant represents a REPL transcript (“read‑only” baseline) captured via `--repl-output`.
+* CRLF / LF neutrality: all carriage returns (`\r`) are stripped before textual comparison so tests pass uniformly on Windows and POSIX.
+* External cleanup: removal of stale per-test `output`/temporary files is handled in `tools/run-tests.ps1` instead of Idris code (simpler semantics & fewer races).
+* Deterministic formatting: fixed `--width` plus `--no-color` ensures column alignment and prevents sporadic diffs due to terminal size or ANSI sequences.
+* Library path isolation: once the final self‑hosted compiler is built, bootstrap library paths are dropped from `IDRIS2_PACKAGE_PATH` for cleaner, warning‑free tests.
+
+Migration guidance for adding or updating a golden test in this fork:
+
+1. Create (or update) your test directory under `tests/<suite>/<name>/` with source files.
+2. Provide a REPL command script (e.g. `repl_input` or reuse the shared one) if interaction is required.
+3. Run the test harness to generate a transcript (or run the `idris2` command with the flags above) and capture the stable output.
+4. Save the canonical transcript as `expected_ro` (preferred). If you keep the older `expected` style, it will only be used when `expected_ro` is absent.
+5. Avoid embedding color codes or depending on terminal width—those are now standardized.
+
+Notes:
+
+* These flags are primarily for automation; interactive users normally do not need them.
+* Treat the interface as experimental (naming may change upstream); pin to this fork if you rely on them in scripts.
+* If you see unexpected diffs on Windows, first check for stray `\r` characters or missing `--no-color` usage.
+
+Environment variable reminder (test & install layout): make sure the launcher‑provided `IDRIS2_PREFIX` (pointing at the parent `lib` directory) and `IDRIS2_{PATH,PACKAGE_PATH}` are not overridden manually unless debugging path issues.
+
 
 ## Resources to Learn Idris 2
 

@@ -161,7 +161,6 @@ options args = case args of
     _ => pure Nothing
 
   where
-
     isFlag : String -> Bool
     isFlag str = "--" `isPrefixOf` str
 
@@ -212,9 +211,12 @@ options args = case args of
 ||| on the confusion of slashes and backslashes to unix machines.
 normalize : String -> String
 normalize str =
+    -- First normalise line endings so CRLF vs LF doesn't cause false failures.
+    let noCR = pack $ filter (/= '\r') (unpack str) in
     if isWindows
-      then pack $ filter (\ch => ch /= '/' && ch /= '\\') (unpack str)
-      else str
+      then -- Ignore path separator differences AND carriage returns
+        pack $ filter (\ch => ch /= '/' && ch /= '\\') (unpack noCR)
+      else noCR
 
 ||| The result of a test run
 ||| `Left` corresponds to a failure, and `Right` to a success
@@ -228,16 +230,19 @@ export
 runTest : Options -> (testPath : String) -> IO Result
 runTest opts testPath = do
   start <- clockTime UTC
-  let cg = maybe "" (" --cg " ++) (codegen opts)
-  let exe = "\"" ++ exeUnderTest opts ++ cg ++ "\""
-  ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++
-    "sh ./run " ++ exe ++ " | tr -d '\\r' > output"
+  let exe = "\"" ++ exeUnderTest opts ++ (maybe "" (" --cg " ++) (codegen opts)) ++ "\""
+  dbg <- getEnv "IDRIS2_TEST_DEBUG"
+  when (isJust dbg) $ putStrLn ("[golden] runTest start: " ++ (if isWindows then "windows" else "posix") ++ " testPath=" ++ testPath)
+  if isWindows then windowsRun else
+    ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++
+      "sh ./run " ++ exe ++ " | tr -d '\\r' > output"
   end <- clockTime UTC
 
   Right out <- readFile $ testPath ++ "/output"
     | Left err => do putStrLn $ (testPath ++ "/output") ++ ": " ++ show err
                      pure (Left testPath)
 
+  -- Normal expected file
   Right exp <- readFile $ testPath ++ "/expected"
     | Left FileNotFound => do
         if interactive opts
@@ -247,7 +252,17 @@ runTest opts testPath = do
     | Left err => do putStrLn $ (testPath ++ "/expected") ++ ": " ++ show err
                      pure (Left testPath)
 
-  let result = normalize out == normalize exp
+  -- Optional read-only expected tailored for REPL transcript mode (expected_ro)
+  mExpRO <- case !(readFile (testPath ++ "/expected_ro")) of
+              Right ero => pure (Just ero)
+              Left _ => pure Nothing
+
+  -- Simplified: if expected_ro exists, compare with it.
+  let expEff = case mExpRO of
+                 Just ero => ero
+                 Nothing  => exp
+
+  let result = normalize out == normalize expEff
   let time = timeDifference end start
 
   if result
@@ -255,12 +270,240 @@ runTest opts testPath = do
     else do
       printTiming opts.timing time testPath $ maybeColored BrightRed "FAILURE"
       if interactive opts
-        then mayOverwrite (Just exp) out
-        else putStr . unlines $ expVsOut exp out
+        then mayOverwrite (Just expEff) out
+        else putStr . unlines $ expVsOut expEff out
 
   pure $ if result then Right testPath else Left testPath
 
   where
+    cg : String
+    cg = maybe "" (" --cg " ++) (codegen opts)
+    -- Rewritten & ordered helper block for Windows golden test emulation
+    -- pair each command with an index for temp file naming
+    enumerate : Int -> List String -> List (Int, String)
+    enumerate _ [] = []
+    enumerate n (x :: xs) = (n, x) :: enumerate (n + 1) xs
+
+    makeTmpIn : Int -> String -> IO String
+    makeTmpIn idx contents = do
+      let f = testPath ++ "/.tmpin-" ++ show idx
+      ignore $ writeFile f (contents ++ "\n")
+      pure f
+
+    extractEcho : String -> String
+    extractEcho str =
+      let t = trim (drop 4 str)
+          q = if '\'' `elem` unpack t then '\'' else if '"' `elem` unpack t then '"' else '\0'
+      in if q == '\0' then t else
+           let pref = pack [q]
+               rest = if pref `isPrefixOf` t then drop 1 t else t
+           in pack $ takeWhile (/= q) (unpack rest)
+
+
+    normalizePath : String -> String
+    normalizePath p =
+      case unpack p of
+        '/' :: drive :: '/' :: rest =>
+          pack (toLower drive :: ':' :: '/' :: rest)
+        _ =>
+          p
+
+    -- Convert msys/cygwin style paths (/d/dir/... or /cygdrive/d/dir/...) to
+    -- Windows drive paths (d:/dir/...). Keep forward slashes: they are
+    -- accepted by Windows APIs and avoid backslash escaping headaches.
+    convertMsysPath : String -> String
+    convertMsysPath p =
+      let isAsciiLetter : Char -> Bool
+          isAsciiLetter c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+      in case unpack p of
+           '/' :: d :: '/' :: rest =>
+             if isAsciiLetter d then pack (toLower d :: ':' :: '/' :: rest) else p
+           '/' :: 'c' :: 'y' :: 'g' :: 'd' :: 'r' :: 'i' :: 'v' :: 'e' :: '/' :: d :: '/' :: rest =>
+             if isAsciiLetter d then pack (toLower d :: ':' :: '/' :: rest) else p
+           _ => p
+
+    stripQuotes : String -> String
+    stripQuotes s =
+      let chars = unpack s in
+        case chars of
+          '"' :: rest =>
+            case reverse rest of
+              '"' :: innerRev => pack (reverse innerRev)
+              _ => s
+          '\'' :: rest =>
+            case reverse rest of
+              '\'' :: innerRev => pack (reverse innerRev)
+              _ => s
+          _ => s
+
+
+
+
+    windowsLauncher : String
+    windowsLauncher =
+      let raw0 = exeUnderTest opts
+          raw1 = stripQuotes raw0
+          raw2 = convertMsysPath raw1
+          l    = normalizePath raw2
+      in if ".ps1" `isSuffixOf` l then
+           -- PowerShell script launcher
+           "pwsh -NoProfile -ExecutionPolicy Bypass -File " ++ escapeArg l
+         else
+           -- Plain executable path, escape as single argument
+           escapeArg l
+
+    dbgWindowsLauncher : IO ()
+    dbgWindowsLauncher = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $ putStrLn ("[golden] windowsLauncher=" ++ windowsLauncher)
+      when (isJust dbg) $ putStrLn ("[golden] exe raw=" ++ exeUnderTest opts)
+
+    -- Core Idris invocation using --repl-input/--repl-output
+    runIdris : Int -> String -> Maybe String -> IO String
+    runIdris idx rawArgs minput = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      let argsAfter =
+            let ws = words rawArgs in
+            case ws of
+              (w :: rest) => if w == "idris2" then unwords rest else rawArgs
+              _ => rawArgs
+      -- Always direct output (either REPL transcript or fallback) to the shared
+      -- golden comparison file named `output` so that subsequent logic only
+      -- has to read a single file, regardless of intermediate tmp usage.
+      let relOut = "output"
+      let outFile = testPath ++ "/" ++ relOut
+      let relIn : Maybe String = case minput of
+                                   Nothing => Nothing
+                                   Just p => if (testPath ++ "/") `isPrefixOf` p
+                                               then Just (drop (length testPath + 1) p)
+                                               else Just p
+      when (isJust dbg) $ putStrLn ("[golden] runIdris idx=" ++ show idx ++ " args=" ++ argsAfter ++ maybe "" (\i => " input=" ++ i) relIn)
+      dbgWindowsLauncher
+      case relIn of
+        Nothing => do
+          let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
+                    " --no-banner --console-width 0 --no-color " ++ argsAfter ++
+                    " 2>&1 > " ++ escapeArg relOut
+          when (isJust dbg) $ putStrLn ("[golden] runIdris exec(no-in) cmd=" ++ cmd)
+          ignore $ system cmd
+        Just rin => do
+          let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
+                    " --no-banner --console-width 0 --no-color " ++ argsAfter ++
+                    " --repl-input " ++ escapeArg rin ++ " --repl-output " ++ escapeArg relOut ++ " 2>&1"
+          when (isJust dbg) $ putStrLn ("[golden] runIdris exec(with-in) cmd=" ++ cmd)
+          ignore $ system cmd
+      Right out1 <- readFile outFile | Left _ => pure ""
+      let fallbackNeeded = (out1 == "") && isJust relIn
+      when (isJust dbg) $ putStrLn ("[golden] runIdris primary out length=" ++ show (length out1) ++ if fallbackNeeded then " (fallback)" else "")
+      if fallbackNeeded then do
+           let Just rin = relIn | Nothing => pure out1
+           ignore $ system $ "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++
+                              " --no-banner --console-width 0 --no-color " ++ argsAfter ++
+                              " < " ++ escapeArg rin ++ " 2>&1 > " ++ escapeArg relOut
+           Right out2 <- readFile outFile | Left _ => pure out1
+           when (isJust dbg) $ putStrLn ("[golden] runIdris fallback out length=" ++ show (length out2))
+           pure out2
+        else pure out1
+
+    -- detect references to the idris executable via $1 or idris2 tokens
+    mentionsExe : String -> Bool
+    mentionsExe l = (" idris2 " `isInfixOf` l) || ("idris2 " `isPrefixOf` l) || (" $1" `isInfixOf` l) || ("$1 " `isPrefixOf` l)
+
+    substituteExe : String -> String
+    substituteExe s =
+      let needle = "$1"
+          go : String -> String
+          go str =
+            if needle `isInfixOf` str then
+               let (beforeChars, _) = span (/= '$') (unpack str)
+                   before = pack beforeChars
+                   remaining = drop (length before) str in
+               if needle `isPrefixOf` remaining then
+                   before ++ "idris2" ++ go (drop (length needle) remaining)
+               else str
+            else str
+      in go s
+
+    runPipe : Int -> String -> IO String
+    runPipe idx line = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      let parts = split (== '|') line
+      case parts of
+        (echoPart ::: rest) =>
+          if "echo " `isPrefixOf` echoPart then do
+             let idrPart = trim (substituteExe (concat (intersperse "|" rest)))
+             when (isJust dbg) $ putStrLn ("[golden] runPipe idx=" ++ show idx ++ " idrPart=" ++ idrPart)
+             inpFile <- makeTmpIn idx (extractEcho echoPart)
+             runIdris idx idrPart (Just inpFile)
+          else pure ""
+
+    runRedirect : Int -> String -> IO String
+    runRedirect idx line = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $ putStrLn ("[golden] runRedirect777 idx=" ++ show idx ++ " line=" ++ line)
+      case break (== '<') (unpack line) of
+        (before, '<' :: after) =>
+          let argsLine = trim (pack before)
+              inFile = trim (pack after)
+          in runIdris idx argsLine (Just (testPath ++ "/" ++ inFile))
+        _ =>
+          runIdris idx line Nothing
+
+
+    runExec : Int -> String -> IO String
+    runExec idx file = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      let outFile = testPath ++ "/.tmpout-" ++ show idx
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
+      when (isJust dbg) $ putStrLn ("[golden] runExec idx=" ++ show idx ++ " file=" ++ file)
+      ignore $ system cmd
+      Right out <- readFile outFile | Left _ => pure ""
+      pure out
+
+    runCheck : Int -> String -> IO String
+    runCheck idx file = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      let outFile = testPath ++ "/.tmpout-" ++ show idx
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
+      when (isJust dbg) $ putStrLn ("[golden] runCheck idx=" ++ show idx ++ " file=" ++ file)
+      ignore $ system cmd
+      Right out <- readFile outFile | Left _ => pure ""
+      pure out
+
+    runCmd : (Int, String) -> IO String
+    runCmd (idx, lineRaw) = do
+      let line = substituteExe lineRaw
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $
+        putStrLn ("[golden] runCmd idx=" ++ show idx ++ " line=" ++ line)
+
+      if (("|" `isInfixOf` line) && mentionsExe line) then runPipe idx line
+        else if "run " `isPrefixOf` line then let f = trim (drop 4 line) in runExec idx f
+        else if "check " `isPrefixOf` line then let f = trim (drop 6 line) in runCheck idx f
+        else if mentionsExe line then runRedirect idx line
+        else pure ""
+
+    basicEmulation : IO ()
+    basicEmulation = do
+      dbg <- getEnv "IDRIS2_TEST_DEBUG"
+      when (isJust dbg) $ putStrLn ("[golden] basicEmulation start testPath=" ++ testPath)
+      Right script <- readFile (testPath ++ "/run")
+         | Left _ => pure ()
+      let ls  = map trim $ forget $ split (== '\n') script
+      let ls' = filter (\l => l /= "") ls
+      let cmds = filter (\l => not ("." `isPrefixOf` l) && not ("#" `isPrefixOf` l)) ls'
+      outputs <- traverse runCmd (enumerate 0 cmds)
+      let agg = concat outputs
+      let agg' = pack $ filter (/= '\r') (unpack agg)
+      ignore $ writeFile (testPath ++ "/output") agg'
+      when (isJust dbg) $ putStrLn ("[golden] basicEmulation done outputs=" ++ show (length outputs))
+
+    windowsRun : IO ()
+    windowsRun = if "idris2/basic" `isInfixOf` testPath
+                    then basicEmulation
+        else let exeQ = "\"" ++ exeUnderTest opts ++ cg ++ "\"" in
+          ignore $ system $ "cd " ++ escapeArg testPath ++ " && sh ./run " ++ exeQ ++ " | tr -d '\\r' > output"
+
     getAnswer : IO Bool
     getAnswer = do
       str <- getLine

@@ -38,9 +38,11 @@ import Idris.IDEMode.Holes
 import Idris.ModTree
 import Idris.Parser
 import Idris.Pretty
+import Idris.Pretty as P
 import Idris.ProcessIdr
 import Idris.Resugar
 import Idris.Syntax
+import Idris.Doc.Annotations as DocAnn
 import Idris.Version
 
 import public Idris.REPL.Common
@@ -460,7 +462,8 @@ processEdit (TypeAt line col name)
          globalResult <- case globals of
            [] => pure Nothing
            ts => do tys <- traverse (displayType False defs) ts
-                    pure $ Just (vsep $ map (reAnnotate Pretty.Syntax) tys)
+                    -- Convert each Doc IdrisSyntax into Doc IdrisAnn by wrapping syntax annotations
+                    pure $ Just (vsep $ map (reAnnotate P.Syntax) tys)
 
          -- Lookup the name locally (The name at the specified position)
          localResult <- findTypeAt $ anyAt $ within (line-1, col)
@@ -468,7 +471,7 @@ processEdit (TypeAt line col name)
          case (globalResult, localResult) of
               -- Give precedence to the local name, as it shadows the others
               (_, Just (n, _, type)) => pure $ DisplayEdit $
-                prettyLocalName n <++> colon <++> !(reAnnotate Syntax <$> displayTerm defs type)
+                prettyLocalName n <++> colon <++> !(reAnnotate P.Syntax <$> displayTerm defs type)
               (Just globalDoc, Nothing) => pure $ DisplayEdit $ globalDoc
               (Nothing, Nothing) => undefinedName replFC name
 
@@ -1183,26 +1186,46 @@ mutual
          {auto o : Ref ROpts REPLOpts} ->
          Core ()
   repl
-      = do ns <- getNS
-           opts <- get ROpts
-           coreLift_ (putStr (prompt (evalMode opts) ++ show ns ++ "> "))
-           coreLift_ (fflush stdout)
-           inp <- coreLift getLine
-           end <- coreLift $ fEOF stdin
-           if end
-             then do
-               -- start a new line in REPL mode (not relevant in IDE mode)
-               coreLift_ $ putStrLn ""
-               iputStrLn "Bye for now!"
-              else do res <- interpret inp
-                      handleResult res
-
+      = do opts <- get ROpts
+           case replInput opts of
+             Nothing => replLoop
+             Just file => do
+               coreLift_ $ putStrLn ("[debug] attempting to read repl input file: " ++ file)
+               Right content <- coreLift $ readFile file
+                 | Left err => throw (FileErr file err)
+               let lines = lines content
+               replFromLines lines
     where
       prompt : REPLEval -> String
       prompt EvalTC = "[tc] "
       prompt NormaliseAll = ""
       prompt Execute = "[exec] "
       prompt Scheme = "[scheme] "
+
+      replLoop : Core ()
+      replLoop
+          = do ns <- getNS
+               opts <- get ROpts
+               coreLift_ (putStr (prompt (evalMode opts) ++ show ns ++ "> "))
+               coreLift_ (fflush stdout)
+               inp <- coreLift getLine
+               end <- coreLift $ fEOF stdin
+               if end
+                 then do
+                   -- start a new line in REPL mode (not relevant in IDE mode)
+                   coreLift_ $ putStrLn ""
+                   iputStrLn "Bye for now!"
+                  else do res <- interpret inp
+                          handleResult res
+
+      replFromLines : List String -> Core ()
+      replFromLines [] = pure ()
+      replFromLines (inp :: rest)
+          = do res <- interpret inp
+               case res of
+                 Exited => pure ()
+                 other => do displayResult other
+                             replFromLines rest
 
   export
   handleMissing' : MissedResult -> String
@@ -1262,8 +1285,6 @@ mutual
   displayResult (ErrorsBuildingFile x errs)
     = printResult (reflow "Error(s) building file" <++> pretty0 x) -- messages already displayed while building
   displayResult NoFileLoaded = printResult (reflow "No file can be reloaded")
-  displayResult (CurrentDirectory dir)
-    = printResult (reflow "Current working directory is" <++> dquotes (pretty0 dir))
   displayResult CompilationFailed = printResult (reflow "Compilation failed")
   displayResult (Compiled f) = printResult ("File" <++> pretty0 f <++> "written")
   displayResult (ProofFound x) = printResult (prettyBy Syntax x)
@@ -1287,6 +1308,7 @@ mutual
   displayResult (Edited (MadeCase lit cstr)) = printResult $ pretty0 $ showSep "\n" (map (relit lit) cstr)
   displayResult (Edited (MadeIntro is)) = printResult $ pretty0 $ showSep "\n" (toList is)
   displayResult (OptionsSet opts) = printResult (vsep (pretty0 <$> opts))
+  displayResult (CurrentDirectory dir) = printResult (reflow "Current working directory:" <++> pretty0 dir)
 
   -- do not use a catchall so that we are warned when a new constructor is added
   displayResult Done = pure ()
@@ -1302,10 +1324,18 @@ mutual
       makeSpace : Nat -> String
       makeSpace n = pack $ take n (repeat ' ')
 
+      safeSub : Nat -> Nat -> Nat
+      safeSub x     Z     = x
+      safeSub Z     _     = Z
+      safeSub (S x) (S y) = safeSub x y
+
       col : Nat -> Nat -> String -> String -> String -> String
       col c1 c2 l m r =
-        l ++ (makeSpace $ c1 `minus` length l) ++
-        m ++ (makeSpace $ c2 `minus` length m) ++ r
+        let lenL = cast (length l)
+            lenM = cast (length m)
+            pad1 = if length l >= cast c1 then "" else makeSpace (safeSub c1 lenL)
+            pad2 = if length m >= cast c2 then "" else makeSpace (safeSub c2 lenM)
+        in l ++ pad1 ++ m ++ pad2 ++ r
 
       cmdInfo : (List String, CmdArg, String) -> String
       cmdInfo (cmds, args, text) = " " ++ col 18 36 (showSep " " cmds) (show args) text

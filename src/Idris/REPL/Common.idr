@@ -79,7 +79,27 @@ printWithStatus render msg status
 export
 printResult : {auto o : Ref ROpts REPLOpts} ->
               Doc IdrisAnn -> Core ()
-printResult x = printWithStatus render x MsgStatusNone
+printResult x = do
+  printWithStatus render x MsgStatusNone
+  opts <- get ROpts
+  case replOutput opts of
+       Nothing => pure ()
+       Just f => do
+         -- Try append first; if it fails because file is missing or inaccessible
+         -- fall back to creating it with WriteTruncate (single write) so future
+         -- appends succeed.
+         appendRes <- coreLift $ openFile f Append
+         case appendRes of
+              Right h => do
+                ignore $ coreLift $ fPutStrLn h !(render x)
+                ignore $ coreLift $ closeFile h
+              Left _ => do
+                createRes <- coreLift $ openFile f WriteTruncate
+                case createRes of
+                     Left _ => pure () -- silently ignore
+                     Right h => do
+                       ignore $ coreLift $ fPutStrLn h !(render x)
+                       ignore $ coreLift $ closeFile h
  --                                      ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -87,7 +107,24 @@ printResult x = printWithStatus render x MsgStatusNone
 export
 printDocResult : {auto o : Ref ROpts REPLOpts} ->
                  Doc IdrisDocAnn -> Core ()
-printDocResult x = printWithStatus (render styleAnn) x MsgStatusNone
+printDocResult x = do
+  printWithStatus (render styleAnn) x MsgStatusNone
+  opts <- get ROpts
+  case replOutput opts of
+       Nothing => pure ()
+       Just f => do
+         appendRes <- coreLift $ openFile f Append
+         case appendRes of
+              Right h => do
+                ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
+                ignore $ coreLift $ closeFile h
+              Left _ => do
+                createRes <- coreLift $ openFile f WriteTruncate
+                case createRes of
+                     Left _ => pure ()
+                     Right h => do
+                       ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
+                       ignore $ coreLift $ closeFile h
  --                                                    ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
