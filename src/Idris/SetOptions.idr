@@ -573,6 +573,31 @@ postOptions res (CheckOnly :: rest)
 postOptions res (RunREPL str :: rest)
     = do replCmd str
          pure False
+postOptions res (ReplOutput file :: rest)
+    = do -- Resolve to absolute path early, similar to ReplInput handling
+         Just cwd <- coreLift currentDir
+           | Nothing => throw (InternalError "Can't get current directory")
+         let absFile = if isAbsolute file then file else cwd </> file
+         -- On Windows, Scheme backends are more robust with forward slashes.
+         -- Backslashes can be interpreted as escape characters when passed
+         -- through layers (Idris -> Scheme runtime). Convert here to ensure
+         -- consistent behaviour across platforms.
+         let portablePath : String -> String
+             portablePath p = pack (map (\c => if c == '\\' then '/' else c) (unpack p))
+         let portable = portablePath absFile
+         update ROpts { replOutput := Just portable }
+         postOptions res rest
+postOptions res (ReplInput file :: rest)
+  = do -- Resolve the file path early to avoid later working-directory changes
+    -- (e.g., switching to an ipkg directory) breaking relative paths.
+    Just cwd <- coreLift currentDir
+      | Nothing => throw (InternalError "Can't get current directory")
+    let absFile = if isAbsolute file then file else cwd </> file
+    let portablePath : String -> String
+        portablePath p = pack (map (\c => if c == '\\' then '/' else c) (unpack p))
+    let portable = portablePath absFile
+    update ROpts { replInput := Just portable }
+    postOptions res rest
 postOptions res (_ :: rest) = postOptions res rest
 
 export

@@ -102,7 +102,7 @@ schHeader chez libs whole
       [else (load-shared-object "libc.so")])
 
     \{ showSep "\n" (map (\x => "(load-shared-object \"" ++ escapeStringChez x ++ "\")") libs) }
-
+    
     \{ ifThenElse whole
                   "(let ()"
                   "(source-directories (cons (getenv \"IDRIS2_INC_SRC\") (source-directories)))"

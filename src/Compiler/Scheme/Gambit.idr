@@ -56,7 +56,7 @@ schHeader = fromString """
     (extended-bindings)
     (not safe)
     (optimize-dead-definitions))
-
+  
   """
 
 showGambitChar : Char -> Builder -> Builder
