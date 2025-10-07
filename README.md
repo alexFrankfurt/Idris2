@@ -1,6 +1,6 @@
 # Idris 2
 
-This fork contains only necessary changes to the Idris2 repo that make it build and install on Windows in a straightforward way, read part about [Windows below](#windows-cmake--powershell). Install [elab](https://github.com/alexFrankfurt/idris2-elab-util) and [pack](https://github.com/alexFrankfurt/idris2-pack?tab=readme-ov-file#reusing-an-existing-idris2-installation-on-windows).
+This fork contains only necessary changes to the Idris2 repo that make it build and install on Windows in a straightforward way, read part about [Windows below](#windows-cmake--powershell). Install [elab](https://github.com/alexFrankfurt/idris2-elab-util) and [pack](https://github.com/alexFrankfurt/idris2-pack?tab=readme-ov-file#reusing-an-existing-idris2-installation-on-windows) for package management.
 
 [![Documentation Status](https://readthedocs.org/projects/idris2/badge/?version=latest)](https://idris2.readthedocs.io/en/latest/?badge=latest)
 [![Build Status](https://github.com/idris-lang/Idris2/actions/workflows/ci-idris2-and-libs.yml/badge.svg?branch=main)](https://github.com/idris-lang/Idris2/actions/workflows/ci-idris2-and-libs.yml?query=branch%3Amain)
