@@ -1206,8 +1206,10 @@ mutual
       replLoop
           = do ns <- getNS
                opts <- get ROpts
-               coreLift_ (putStr (prompt (evalMode opts) ++ show ns ++ "> "))
+               let promptStr = prompt (evalMode opts) ++ show ns ++ "> "
+               coreLift_ (putStr promptStr)
                coreLift_ (fflush stdout)
+               appendReplOutput (pure promptStr)
                inp <- coreLift getLine
                end <- coreLift $ fEOF stdin
                if end
@@ -1221,7 +1223,11 @@ mutual
       replFromLines : List String -> Core ()
       replFromLines [] = pure ()
       replFromLines (inp :: rest)
-          = do res <- interpret inp
+          = do ns <- getNS
+               opts <- get ROpts
+               let promptStr = prompt (evalMode opts) ++ show ns ++ "> "
+               appendReplOutput (pure promptStr)
+               res <- interpret inp
                case res of
                  Exited => pure ()
                  other => do displayResult other

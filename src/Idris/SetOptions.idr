@@ -541,6 +541,14 @@ preOptions (Total :: opts)
 preOptions (NoCSE :: opts)
     = do updateSession ({ noCSE := True })
          preOptions opts
+preOptions (ReplOutput file :: opts)
+    = do Just cwd <- coreLift currentDir
+             | Nothing => throw (InternalError "Can't get current directory")
+         let absFile = if isAbsolute file then file else cwd </> file
+         let portablePath : String -> String
+             portablePath p = pack (map (\c => if c == '\\' then '/' else c) (unpack p))
+         update ROpts { replOutput := Just (portablePath absFile) }
+         preOptions opts
 preOptions (_ :: opts) = preOptions opts
 
 -- Options to be processed after type checking. Returns whether execution
