@@ -115,6 +115,10 @@ If you want, add `C:\\Idris2\\bin` to PATH.
 - To run the Idris 2 test suite on Windows via CMake, use the custom test target: build stage2 first, then `cmake --build . --config Release -t test` (from the build folder). You can filter tests by passing `-Only <pattern>` or `-Except <pattern>` via `tools/run-tests.ps1` directly.
 - If you switch versions, re-run configure and install with the new `-D IDRIS2_VERSION=...`.
 
+#### Test Suite
+
+For detailed instructions on running individual or multiple tests, filtering with `-Only` / `-Except`, using array selectors, and listing tests without executing them, see [RUNNING_TESTS.md](RUNNING_TESTS.md).
+
 #### Automated REPL Flags & Golden Test Changes (This Fork)
 
 This Windows-focused fork introduces (or standardizes) several compiler flags and test harness behaviours to make the REPL and golden tests deterministic and CI‑friendly:

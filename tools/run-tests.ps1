@@ -1,13 +1,49 @@
 param(
   [ValidateSet('Debug','Release','RelWithDebInfo','MinSizeRel')]
   [string]$Config = 'Release',
-  [string]$Only,
+  # -Only may be a single regex string or an array of shorthand tokens (e.g. @('001','002')).
+  [Parameter(ValueFromPipeline=$false)]
+  [Object]$Only,
   [string]$Except,
-  [string]$Idris
+  [string]$Idris,
+  [switch]$ListOnly
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Normalise the user-supplied --only selector:
+#  * If it's an array of tokens (e.g. numbers or partial names), expand them to full test path regex parts.
+#  * If it's a single string, just clean path separators.
+function Expand-OnlySelector([Object]$sel) {
+  if (-not $sel) { return $null }
+  if ($sel -is [System.Array]) {
+    $tokens = @()
+    foreach ($t in $sel) {
+      if (-not $t) { continue }
+      $tok = ($t.ToString().Trim())
+      if (-not $tok) { continue }
+      # Heuristic: if token is purely digits, match any test whose leaf directory ends with that number
+      if ($tok -match '^\d+$') {
+        # Build pattern like idris2/.*/basic0*<tok>$ OR allow anywhere: use trailing directory name match
+        $tokens += "${tok}$"
+      } else {
+        # General substring fallback
+        $tokens += [Regex]::Escape($tok)
+      }
+    }
+    if ($tokens.Count -eq 0) { return $null }
+    # Join tokens with '|' ensuring they don't accidentally introduce path backslashes
+    return ($tokens -join '|')
+  } else {
+    return ($sel.ToString() -replace '\\','/').Trim()
+  }
+}
+
+$Only = Expand-OnlySelector $Only
+if ($Only) {
+  Write-Host "[Tests] --only selector pattern: $Only"
+}
 
 # Always operate from repo root (parent of script's folder)
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -151,6 +187,46 @@ function Convert-ToPosixPath([string]$p) {
 
   Initialize-IdrisEnv -Config $Config
 
+# Ensure the standard libraries are installed into the tests prefix when missing.
+function Ensure-CoreLibsInstalled {
+  param(
+    [Parameter(Mandatory=$true)][string]$IdrisCmd,
+    [Parameter(Mandatory=$true)][string]$Config
+  )
+  if (-not $env:NAME_VERSION) { return }
+  $testsPrefix = Join-Path $repoRoot 'tests/prefix'
+  $versionTag = ($env:NAME_VERSION -replace '^idris2-','')
+  if (-not $versionTag) { return }
+  $required = @('prelude','base','contrib','linear','network','test','papers')
+  foreach ($lib in $required) {
+    $targetDir = Join-Path (Join-Path $testsPrefix $env:NAME_VERSION) ("$lib-$versionTag")
+    if (Test-Path $targetDir) { continue }
+    # If already installed under bootstrap-build, mirror rather than reinstall to save time
+    $bootstrapLibRoot = Join-Path (Join-Path $repoRoot 'bootstrap-build') $env:NAME_VERSION
+    $bootstrapLibDir  = Join-Path $bootstrapLibRoot ("$lib-$versionTag")
+    if (Test-Path $bootstrapLibDir) {
+      try {
+        Write-Host "[Tests] Mirroring existing bootstrap lib: $lib" -ForegroundColor DarkCyan
+        New-Item -ItemType Directory -Force -Path (Split-Path $targetDir) | Out-Null
+        Copy-Item -Recurse -Force $bootstrapLibDir $targetDir
+        continue
+      } catch {
+        Write-Warning ("[Tests] Failed to mirror bootstrap lib {0}: {1}" -f $lib, $_.Exception.Message)
+        # Fall through to attempt a fresh install
+      }
+    }
+    $ipkg = Join-Path (Join-Path $repoRoot "libs/$lib") ("$lib.ipkg")
+    if (-not (Test-Path $ipkg)) { Write-Warning "[Tests] Missing ipkg for $lib ($ipkg)"; continue }
+    Write-Host "[Tests] Installing missing core lib: $lib" -ForegroundColor Cyan
+    try {
+      & $IdrisCmd --install $ipkg | Write-Host
+    }
+    catch {
+      Write-Warning ("[Tests] Failed to install {0}: {1}" -f $lib, $_.Exception.Message)
+    }
+  }
+}
+
 # Clean per-test stale artifacts (output files, temporary .tmpout, previous build/exec inside test cases)
 function Invoke-TestCleanup {
   param([string]$OnlyPattern)
@@ -170,6 +246,34 @@ function Invoke-TestCleanup {
 }
 
 Invoke-TestCleanup -OnlyPattern $Only
+
+# If -ListOnly was requested, enumerate matching test directories and exit before building the runner.
+if ($ListOnly) {
+  $testsDir = Join-Path $repoRoot 'tests'
+  if (-not (Test-Path $testsDir)) { Write-Warning '[Tests] No tests directory found.'; exit 0 }
+  $allTestDirs = Get-ChildItem -Path $testsDir -Recurse -Directory -ErrorAction SilentlyContinue |
+    Where-Object { (Test-Path (Join-Path $_.FullName 'expected')) -or (Test-Path (Join-Path $_.FullName 'expected_ro')) }
+  $normalized = $allTestDirs | ForEach-Object { $_.FullName -replace '\\','/' }
+  if ($Only) {
+    $regex = [Regex]::new($Only)
+    $normalized = $normalized | Where-Object { $regex.IsMatch($_) }
+  }
+  if ($Except) {
+    $ex = ($Except -replace '\\','/').Trim()
+    if ($ex) {
+      $exRegex = [Regex]::new($ex)
+      $normalized = $normalized | Where-Object { -not ($exRegex.IsMatch($_)) }
+    }
+  }
+  $relative = $normalized | ForEach-Object {
+    $rel = $_.Substring($testsDir.Length)
+    while ($rel.StartsWith('/') -or $rel.StartsWith('\')) { $rel = $rel.Substring(1) }
+    $rel
+  }
+  Write-Host "[Tests] Listing matched tests (count=$($relative.Count)):" -ForegroundColor Cyan
+  $relative | Sort-Object | ForEach-Object { Write-Host "  $_" }
+  exit 0
+}
 
 # Locate local Idris launchers
 $idrisSh = Join-Path $repoRoot 'build/exec/idris2'      # POSIX sh script for tests
@@ -245,6 +349,8 @@ try {
   } else {
     throw "No tests ipkg or Main.idr found under .\tests"
   }
+  # After building the runner ensure its dependencies (standard libs) are installed
+  Ensure-CoreLibsInstalled -IdrisCmd $idrisBuilder -Config $Config
 } finally {
   Pop-Location
 }

@@ -34,13 +34,37 @@ import System.File
 ||| messages, an unhandled error is an example of what should
 ||| *not* end up here.
 export
+appendReplOutput : {auto o : Ref ROpts REPLOpts} ->
+                   Core String -> Core ()
+appendReplOutput mkStr
+  = do opts <- get ROpts
+       case replOutput opts of
+            Nothing => pure ()
+            Just f => do
+              str <- mkStr
+              appendRes <- coreLift $ openFile f Append
+              case appendRes of
+                   Right h => do
+                     ignore $ coreLift $ fPutStrLn h str
+                     ignore $ coreLift $ closeFile h
+                   Left _ => do
+                     createRes <- coreLift $ openFile f WriteTruncate
+                     case createRes of
+                          Left _ => pure () -- silently ignore
+                          Right h => do
+                            ignore $ coreLift $ fPutStrLn h str
+                            ignore $ coreLift $ closeFile h
+
+export
 iputStrLn : {auto c : Ref Ctxt Defs} ->
             {auto o : Ref ROpts REPLOpts} ->
             Doc IdrisAnn -> Core ()
 iputStrLn msg
     = do opts <- get ROpts
          case idemode opts of
-              REPL InfoLvl  => coreLift $ putStrLn !(render msg)
+              REPL InfoLvl  =>
+                do coreLift $ putStrLn !(render msg)
+                   appendReplOutput (render msg)
               -- output silenced
               REPL _ => pure ()
               IDEMode i _ f =>
@@ -81,25 +105,7 @@ printResult : {auto o : Ref ROpts REPLOpts} ->
               Doc IdrisAnn -> Core ()
 printResult x = do
   printWithStatus render x MsgStatusNone
-  opts <- get ROpts
-  case replOutput opts of
-       Nothing => pure ()
-       Just f => do
-         -- Try append first; if it fails because file is missing or inaccessible
-         -- fall back to creating it with WriteTruncate (single write) so future
-         -- appends succeed.
-         appendRes <- coreLift $ openFile f Append
-         case appendRes of
-              Right h => do
-                ignore $ coreLift $ fPutStrLn h !(render x)
-                ignore $ coreLift $ closeFile h
-              Left _ => do
-                createRes <- coreLift $ openFile f WriteTruncate
-                case createRes of
-                     Left _ => pure () -- silently ignore
-                     Right h => do
-                       ignore $ coreLift $ fPutStrLn h !(render x)
-                       ignore $ coreLift $ closeFile h
+  appendReplOutput (render x)
  --                                      ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -109,22 +115,7 @@ printDocResult : {auto o : Ref ROpts REPLOpts} ->
                  Doc IdrisDocAnn -> Core ()
 printDocResult x = do
   printWithStatus (render styleAnn) x MsgStatusNone
-  opts <- get ROpts
-  case replOutput opts of
-       Nothing => pure ()
-       Just f => do
-         appendRes <- coreLift $ openFile f Append
-         case appendRes of
-              Right h => do
-                ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
-                ignore $ coreLift $ closeFile h
-              Left _ => do
-                createRes <- coreLift $ openFile f WriteTruncate
-                case createRes of
-                     Left _ => pure ()
-                     Right h => do
-                       ignore $ coreLift $ fPutStrLn h !(render styleAnn x)
-                       ignore $ coreLift $ closeFile h
+  appendReplOutput (render styleAnn x)
  --                                                    ^^^^^^^^^^^^^
  -- "results" are printed no matter the verbosity level
 
@@ -143,30 +134,32 @@ emitProblem : {auto c : Ref Ctxt Defs} ->
             {auto s : Ref Syn SyntaxInfo} ->
             a -> (DocCreator a) -> (DocCreator a) -> (a -> Maybe FC) -> MsgStatus -> Core ()
 emitProblem a replDocCreator idemodeDocCreator getFC status
-    = do opts <- get ROpts
-         case idemode opts of
-              REPL _ =>
-                  do msg <- replDocCreator a
-                     printWithStatus render msg status
-              IDEMode i _ f =>
-                  do msg <- idemodeDocCreator a
-                     -- TODO: Display a better message when the error doesn't contain a location
-                     case map toNonEmptyFC (getFC a) of
-                          Nothing => iputStrLn msg
-                          Just nfc@(origin, startPos, endPos) => do
-                            fname <- case origin of
-                              PhysicalIdrSrc ident => do
-                                -- recover the file name relative to the working directory.
-                                -- (This is what idris2-mode expects)
-                                let fc = MkFC (PhysicalIdrSrc ident) startPos endPos
-                                catch (nsToSource fc ident) (const $ pure "(File-Not-Found)")
-                              PhysicalPkgSrc fname =>
-                                pure fname
-                              Virtual Interactive =>
-                                pure "(Interactive)"
-                            let (str,spans) = !(renderWithDecorations annToProperties msg)
-                            send f (Warning (cast (the String fname, nfc)) str spans
-                                            i)
+  = do
+      opts <- get ROpts
+      case idemode opts of
+           REPL _ =>
+             do msg <- replDocCreator a
+                printWithStatus render msg status
+                appendReplOutput (render msg)
+           IDEMode i _ f =>
+             do msg <- idemodeDocCreator a
+                -- TODO: Display a better message when the error doesn't contain a location
+                case map toNonEmptyFC (getFC a) of
+                     Nothing => iputStrLn msg
+                     Just nfc@(origin, startPos, endPos) => do
+                       fname <- case origin of
+                         PhysicalIdrSrc ident => do
+                           -- recover the file name relative to the working directory.
+                           -- (This is what idris2-mode expects)
+                           let fc = MkFC (PhysicalIdrSrc ident) startPos endPos
+                           catch (nsToSource fc ident) (const $ pure "(File-Not-Found)")
+                         PhysicalPkgSrc fname =>
+                           pure fname
+                         Virtual Interactive =>
+                           pure "(Interactive)"
+                       let (str,spans) = !(renderWithDecorations annToProperties msg)
+                       send f (Warning (cast (the String fname, nfc)) str spans
+                                       i)
 
 -- Display an error message from checking a source file
 export
