@@ -50,6 +50,45 @@ $env:IDRIS2_PACKAGE_PATH = $normVersioned
 $env:RACKET = "racket"
 $env:RACKET_RACO = "raco"
 
+# Ensure Chez runtime can locate boot libraries if backend outputs are present
+$schemeCandidate = if ($env:SCHEME) { $env:SCHEME } else { 'scheme' }
+$schemeInfo = $null
+try { $schemeInfo = Get-Command $schemeCandidate -ErrorAction Stop } catch {}
+$schemeCommand = if ($schemeInfo) {
+  if ($schemeInfo.Source) { $schemeInfo.Source } else { $schemeInfo.Path }
+} else {
+  $schemeCandidate
+}
+if ($schemeInfo) {
+  $schemeDir = Split-Path $schemeCommand -Parent
+  $schemeArch = Split-Path $schemeDir -Leaf
+  $schemeBin = Split-Path $schemeDir -Parent
+  $schemeRoot = Split-Path $schemeBin -Parent
+  $defaultBoot = Join-Path (Join-Path $schemeRoot 'boot') $schemeArch
+  if ((-not $env:CHEZSCHEMELIBDIRS) -and (Test-Path $defaultBoot)) {
+    $env:CHEZSCHEMELIBDIRS = $defaultBoot
+  }
+  elseif ($env:CHEZSCHEMELIBDIRS -and (Test-Path $defaultBoot)) {
+    $paths = $env:CHEZSCHEMELIBDIRS -split ';'
+    if (-not ($paths | Where-Object { $_ -eq $defaultBoot })) {
+      $env:CHEZSCHEMELIBDIRS = "$defaultBoot;$env:CHEZSCHEMELIBDIRS"
+    }
+  }
+} else {
+  $schemeDir = $null
+  $schemeArch = $null
+}
+if (Test-Path (Join-Path $app 'Program.boot')) {
+  if ($env:CHEZSCHEMELIBDIRS) {
+    $paths = $env:CHEZSCHEMELIBDIRS -split ';'
+    if (-not ($paths | Where-Object { $_ -eq $app })) {
+      $env:CHEZSCHEMELIBDIRS = "$app;$env:CHEZSCHEMELIBDIRS"
+    }
+  } else {
+    $env:CHEZSCHEMELIBDIRS = $app
+  }
+}
+
 # Parse only --repl-input (REPL output redirection handled internally)
 $argList = New-Object System.Collections.Generic.List[string]
 $argList.AddRange([string[]]$args)
@@ -70,13 +109,60 @@ while ($i -lt $argList.Count) {
   $i++
 }
 
-# Prefer final self-hosted idris2.exe if present, else fall back to bootstrap
-$exe = Join-Path $app 'idris2.exe'
-if (-not (Test-Path $exe)) { $exe = Join-Path $app 'idris2-boot.exe' }
+# Decide launch target based on available artefacts
+$argArray = [string[]]$argList.ToArray()
+$cmdPath = $null
+$cmdArgs = @()
+
+$exe       = Join-Path $app 'idris2.exe'
+$bootExe   = Join-Path $app 'idris2-boot.exe'
+$chezSo    = Join-Path $app 'idris2.so'
+$chezSs    = Join-Path $app 'idris2.ss'
+$bootSo    = Join-Path $app 'idris2-boot.so'
+$bootSs    = Join-Path $app 'idris2-boot.ss'
+$finalRkt  = Join-Path $app 'idris2.rkt'
+$bootRkt   = Join-Path $app 'idris2-boot.rkt'
+
+if (Test-Path $exe) {
+  $cmdPath = $exe
+  $cmdArgs = $argArray
+} elseif (Test-Path $chezSo) {
+  if (-not $schemeInfo) { throw 'Chez backend artefacts present but no scheme executable was found. Set SCHEME or ensure scheme.exe is on PATH.' }
+  $cmdPath = $schemeCommand
+  $cmdArgs = @('--script', $chezSo) + $argArray
+} elseif (Test-Path $chezSs) {
+  if (-not $schemeInfo) { throw 'Chez backend artefacts present but no scheme executable was found. Set SCHEME or ensure scheme.exe is on PATH.' }
+  $cmdPath = $schemeCommand
+  $cmdArgs = @('--script', $chezSs) + $argArray
+} elseif (Test-Path $bootSo) {
+  if (-not $schemeInfo) { throw 'Chez bootstrap artefacts present but no scheme executable was found. Set SCHEME or ensure scheme.exe is on PATH.' }
+  $cmdPath = $schemeCommand
+  $cmdArgs = @('--script', $bootSo) + $argArray
+} elseif (Test-Path $bootSs) {
+  if (-not $schemeInfo) { throw 'Chez bootstrap artefacts present but no scheme executable was found. Set SCHEME or ensure scheme.exe is on PATH.' }
+  $cmdPath = $schemeCommand
+  $cmdArgs = @('--script', $bootSs) + $argArray
+} elseif (Test-Path $bootExe) {
+  $cmdPath = $bootExe
+  $cmdArgs = $argArray
+} elseif (Test-Path $finalRkt) {
+  $racketCmd = if ($env:RACKET) { $env:RACKET } else { 'racket' }
+  $cmdPath = $racketCmd
+  $cmdArgs = @($finalRkt) + $argArray
+} elseif (Test-Path $bootRkt) {
+  $racketCmd = if ($env:RACKET) { $env:RACKET } else { 'racket' }
+  $cmdPath = $racketCmd
+  $cmdArgs = @($bootRkt) + $argArray
+}
+
+if (-not $cmdPath) {
+  throw 'No Idris2 runtime found (expected idris2.exe, idris2.so/.ss, idris2-boot.*, or idris2.rkt).'
+}
+
 if ($replInput) {
-  Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -Wait -RedirectStandardInput $replInput | Out-Null
+  Start-Process -FilePath $cmdPath -ArgumentList $cmdArgs -NoNewWindow -Wait -RedirectStandardInput $replInput | Out-Null
 } else {
-  & $exe @argList
+  & $cmdPath @cmdArgs
 }
 '@
 
@@ -167,21 +253,29 @@ if (Test-Path (Join-Path $appDir 'idris2-boot.rkt')) {
 }
 
   # Copy final stage idris2.exe / idris2.rkt from build tree if available
-  $finalExeSrc = Join-Path $repoRoot 'build-cmake\exec\idris2_app\idris2.exe'
-  if (-not (Test-Path $finalExeSrc)) {
-    $finalExeSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.exe'
-  }
-  if (Test-Path $finalExeSrc) {
-    Write-Host "[Idris2] Installing final idris2.exe -> $appDir"
-    Copy-Item -Force $finalExeSrc (Join-Path $appDir 'idris2.exe')
-  }
-  $finalRktSrc = Join-Path $repoRoot 'build-cmake\exec\idris2_app\idris2.rkt'
-  if (-not (Test-Path $finalRktSrc)) {
-    $finalRktSrc = Join-Path $repoRoot 'build\exec\idris2_app\idris2.rkt'
-  }
-  if (Test-Path $finalRktSrc) {
-    Write-Host "[Idris2] Installing final idris2.rkt -> $appDir"
-    Copy-Item -Force $finalRktSrc (Join-Path $appDir 'idris2.rkt')
+  $emitCandidates = @(
+    @{ src = 'build-cmake\exec\idris2_app\idris2.exe'; dest = 'idris2.exe'; kind = 'final idris2.exe' },
+    @{ src = 'build\exec\idris2_app\idris2.exe'; dest = 'idris2.exe'; kind = 'final idris2.exe' },
+    @{ src = 'build-cmake\exec\idris2_app\idris2.rkt'; dest = 'idris2.rkt'; kind = 'final idris2.rkt' },
+    @{ src = 'build\exec\idris2_app\idris2.rkt'; dest = 'idris2.rkt'; kind = 'final idris2.rkt' },
+    @{ src = 'build-cmake\exec\idris2_app\idris2.so'; dest = 'idris2.so'; kind = 'final idris2.so' },
+    @{ src = 'build\exec\idris2_app\idris2.so'; dest = 'idris2.so'; kind = 'final idris2.so' },
+    @{ src = 'build-cmake\exec\idris2_app\idris2.ss'; dest = 'idris2.ss'; kind = 'final idris2.ss' },
+    @{ src = 'build\exec\idris2_app\idris2.ss'; dest = 'idris2.ss'; kind = 'final idris2.ss' },
+    @{ src = 'build-cmake\exec\idris2_app\idris2-boot.so'; dest = 'idris2-boot.so'; kind = 'bootstrap idris2-boot.so' },
+    @{ src = 'build\exec\idris2_app\idris2-boot.so'; dest = 'idris2-boot.so'; kind = 'bootstrap idris2-boot.so' },
+    @{ src = 'build-cmake\exec\idris2_app\idris2-boot.ss'; dest = 'idris2-boot.ss'; kind = 'bootstrap idris2-boot.ss' },
+    @{ src = 'build\exec\idris2_app\idris2-boot.ss'; dest = 'idris2-boot.ss'; kind = 'bootstrap idris2-boot.ss' }
+  )
+  $seenDest = @{}
+  foreach ($entry in $emitCandidates) {
+    $src = Join-Path $repoRoot $entry.src
+    $destPath = Join-Path $appDir $entry.dest
+  if ((Test-Path $src) -and -not $seenDest.ContainsKey($entry.dest)) {
+      Write-Host "[Idris2] Installing $($entry.kind) -> $destPath"
+      Copy-Item -Force $src $destPath
+      $seenDest[$entry.dest] = $true
+    }
   }
 
 # Install Racket backend support files (required for Racket codegen at runtime)

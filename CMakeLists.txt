@@ -15,15 +15,30 @@ set(STAGE1_STAMP "${STAGE_DIR}/.stage1-${CMAKE_CFG_INTDIR}.stamp")
 set(STAGE2_STAMP "${STAGE_DIR}/.stage2-${CMAKE_CFG_INTDIR}.stamp")
 set(STAGE2_PART1_STAMP "${STAGE_DIR}/.stage2-part1-${CMAKE_CFG_INTDIR}.stamp")
 
-# Stage 1 (Racket) -> stamp
+# Stage 1 script/args depend on selected code generator
+set(STAGE1_SCRIPT "${CMAKE_SOURCE_DIR}/bootstrap-stage1-racket.ps1")
+set(STAGE1_DEPS
+  "${CMAKE_SOURCE_DIR}/bootstrap-stage1-racket.ps1"
+  "${CMAKE_SOURCE_DIR}/bootstrap/idris2_app/idris2.rkt"
+)
+set(STAGE1_ARGS -Idris2Version "${IDRIS2_VERSION}" -Config $<CONFIG>)
+if (IDRIS2_CG STREQUAL "chez")
+  set(STAGE1_SCRIPT "${CMAKE_SOURCE_DIR}/bootstrap-stage1-chez.ps1")
+  set(STAGE1_DEPS
+    "${CMAKE_SOURCE_DIR}/bootstrap-stage1-chez.ps1"
+    "${CMAKE_SOURCE_DIR}/bootstrap/idris2_app/idris2.ss"
+  )
+endif()
+
+# Stage 1 -> stamp
 add_custom_command(
   OUTPUT ${STAGE1_STAMP}
   COMMAND pwsh.exe -NoProfile -ExecutionPolicy Bypass
-          -File "${CMAKE_SOURCE_DIR}/bootstrap-stage1-racket.ps1"
-          -Idris2Version "${IDRIS2_VERSION}" -Config $<CONFIG>
+          -File "${STAGE1_SCRIPT}"
+          ${STAGE1_ARGS}
   COMMAND ${CMAKE_COMMAND} -E touch ${STAGE1_STAMP}
   DEPENDS idris2_support idris2_support_static
-          "${CMAKE_SOURCE_DIR}/bootstrap-stage1-racket.ps1"
+          ${STAGE1_DEPS}
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   VERBATIM
 )

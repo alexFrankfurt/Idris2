@@ -12,6 +12,29 @@ $repoRoot = Split-Path -Parent $PSCommandPath
 $bootstrapPrefix = Join-Path $repoRoot 'bootstrap-build'
 
 if (-not $Idris2Cg) { $Idris2Cg = 'chez' }
+$Idris2Cg = $Idris2Cg.ToLowerInvariant()
+$env:IDRIS2_CG = $Idris2Cg
+
+if ($Idris2Cg -eq 'chez') {
+  if (-not $Scheme) {
+    try {
+      $Scheme = (Get-Command 'scheme' -ErrorAction Stop).Source
+      Write-Verbose "Defaulting SCHEME to 'scheme' found on PATH."
+    } catch {
+      $Scheme = $null
+    }
+  }
+  if (-not $Scheme) {
+    throw 'Chez backend selected but no SCHEME executable was provided and none was found on PATH.'
+  }
+  try {
+    $schemeCmd = Get-Command $Scheme -ErrorAction Stop
+    $Scheme = if ($schemeCmd.Source) { $schemeCmd.Source } else { $schemeCmd.Path }
+  } catch {
+    throw "SCHEME executable '$Scheme' not found on PATH."
+  }
+  $env:SCHEME = $Scheme
+}
 
 Write-Host "bootstrapping in: $bootstrapPrefix"
 
@@ -35,11 +58,26 @@ $env:IDRIS2_BOOT = Join-Path (Join-Path $repoRoot 'build/exec') 'idris2.ps1'
 
 # Determine TTC version used by the bootstrap compiler so we can pre-create folders
 $ttcVersion = 2023090800
-$ttcSourceCandidates = @(
-  (Join-Path $repoRoot 'build/exec/idris2_app/idris2-boot.rkt'),
-  (Join-Path $repoRoot 'bootstrap-build/idris2_app/idris2-boot.rkt'),
-  (Join-Path $repoRoot 'bootstrap/idris2_app/idris2.rkt')
-)
+if ($Idris2Cg -eq 'racket') {
+  $ttcSourceCandidates = @(
+    (Join-Path $repoRoot 'build/exec/idris2_app/idris2-boot.rkt'),
+    (Join-Path $repoRoot 'bootstrap-build/idris2_app/idris2-boot.rkt'),
+    (Join-Path $repoRoot 'bootstrap/idris2_app/idris2.rkt')
+  )
+} elseif ($Idris2Cg -eq 'chez') {
+  $ttcSourceCandidates = @(
+    (Join-Path $repoRoot 'build/exec/idris2_app/idris2-boot.ss'),
+    (Join-Path $repoRoot 'bootstrap-build/idris2_app/idris2-boot.ss'),
+    (Join-Path $repoRoot 'bootstrap/idris2_app/idris2.ss'),
+    (Join-Path $repoRoot 'build/exec/idris2_app/idris2.ss')
+  )
+} else {
+  $ttcSourceCandidates = @(
+    (Join-Path $repoRoot 'build/exec/idris2_app/idris2-boot.rkt'),
+    (Join-Path $repoRoot 'bootstrap-build/idris2_app/idris2-boot.rkt'),
+    (Join-Path $repoRoot 'bootstrap/idris2_app/idris2.rkt')
+  )
+}
 foreach ($f in $ttcSourceCandidates) {
   if (Test-Path $f) {
     try {
@@ -103,7 +141,8 @@ if (Test-Path $bootstrapDll) {
 # Update the launcher to point to the final app dir instead of bootstrap-build
 $launcher = Join-Path $repoRoot 'build/exec/idris2.ps1'
 $appDir = $targetDir
-$launcherContent = @"
+if ($Idris2Cg -eq 'racket') {
+  $launcherContent = @"
 `$ErrorActionPreference = 'Stop'
 `$app = "$appDir"
 `$bootstrapPrefix = "$bootstrapPrefix"
@@ -130,6 +169,74 @@ if (Test-Path `$final) {
   Write-Error 'No Idris2 launcher found (expected idris2.exe, idris2-boot.exe, or idris2-boot.rkt).'
 }
 "@
+} elseif ($Idris2Cg -eq 'chez') {
+  $launcherContent = @"
+`$ErrorActionPreference = 'Stop'
+`$app = "$appDir"
+`$bootstrapPrefix = "$bootstrapPrefix"
+`$versionedPrefix = Join-Path `$bootstrapPrefix 'idris2-0.7.0'
+`$env:PATH = "`$app/lib;`$app;`$env:PATH"
+`$env:LD_LIBRARY_PATH = "`$app/lib;`$app;`$env:LD_LIBRARY_PATH"
+`$env:DYLD_LIBRARY_PATH = "`$app/lib;`$app;`$env:DYLD_LIBRARY_PATH"
+# Ensure runtime finds installed libs and support data by default
+`$env:IDRIS2_PREFIX = `$bootstrapPrefix
+`$env:IDRIS2_DATA = (Join-Path `$versionedPrefix 'support')
+`$scheme = "$Scheme"
+`$schemeResolved = (Get-Command `$scheme -ErrorAction SilentlyContinue).Path
+if (-not `$schemeResolved) { `$schemeResolved = `$scheme }
+`$schemeDir = Split-Path `$schemeResolved -Parent
+`$schemeArch = Split-Path `$schemeDir -Leaf
+`$schemeBin = Split-Path `$schemeDir -Parent
+`$schemeRoot = Split-Path `$schemeBin -Parent
+`$defaultBoot = Join-Path (Join-Path `$schemeRoot 'boot') `$schemeArch
+if (-not `$env:CHEZSCHEMELIBDIRS -and (Test-Path `$defaultBoot)) {
+  `$env:CHEZSCHEMELIBDIRS = `$defaultBoot
+}
+`$so = Join-Path `$app 'idris2.so'
+`$ss = Join-Path `$app 'idris2.ss'
+`$bootSo = Join-Path `$app 'idris2-boot.so'
+`$bootSs = Join-Path `$app 'idris2-boot.ss'
+if (Test-Path `$so) {
+  Write-Host '[idris2.ps1 stage2] Using compiled idris2.so'
+  & `$scheme --script `$so @args
+} elseif (Test-Path `$ss) {
+  Write-Host '[idris2.ps1 stage2] Using source idris2.ss'
+  & `$scheme --script `$ss @args
+} elseif (Test-Path `$bootSo) {
+  Write-Host '[idris2.ps1 stage2] Using bootstrap idris2-boot.so'
+  & `$scheme --script `$bootSo @args
+} elseif (Test-Path `$bootSs) {
+  Write-Host '[idris2.ps1 stage2] Using bootstrap idris2-boot.ss'
+  & `$scheme --script `$bootSs @args
+} else {
+  Write-Error 'No Idris2 Chez launcher found (expected idris2.so/idris2.ss/idris2-boot.so/idris2-boot.ss).'
+}
+"@
+} else {
+  $launcherContent = @"
+`$ErrorActionPreference = 'Stop'
+`$app = "$appDir"
+`$bootstrapPrefix = "$bootstrapPrefix"
+`$versionedPrefix = Join-Path `$bootstrapPrefix 'idris2-0.7.0'
+`$env:PATH = "`$app/lib;`$app;`$env:PATH"
+`$env:LD_LIBRARY_PATH = "`$app/lib;`$app;`$env:LD_LIBRARY_PATH"
+`$env:DYLD_LIBRARY_PATH = "`$app/lib;`$app;`$env:DYLD_LIBRARY_PATH"
+# Ensure runtime finds installed libs and support data by default
+`$env:IDRIS2_PREFIX = `$bootstrapPrefix
+`$env:IDRIS2_DATA = (Join-Path `$versionedPrefix 'support')
+`$final = Join-Path `$app 'idris2.exe'
+`$exe = Join-Path `$app 'idris2-boot.exe'
+if (Test-Path `$final) {
+  Write-Host '[idris2.ps1 stage2] Using final idris2.exe'
+  & `$final @args
+} elseif (Test-Path `$exe) {
+  Write-Host '[idris2.ps1 stage2] Using compiled idris2-boot.exe'
+  & `$exe @args
+} else {
+  Write-Error "No Idris2 launcher found for backend '$Idris2Cg' (expected idris2.exe or idris2-boot.exe)."
+}
+"@
+}
 $launcherContent | Set-Content -Encoding ASCII -Path $launcher
 
 # 2) Build and install libs needed for idris2
@@ -152,13 +259,15 @@ if (Test-Path $supportDataRoot) {
 }
 
 # helper function to call make-equivalent in subdir
-function Build-Lib($lib, $exe) {
+function Build-Lib($lib, $exe, $cg) {
   Push-Location (Join-Path $repoRoot "libs/$lib")
   try {
     $ipkg = Get-ChildItem -Filter '*.ipkg' | Select-Object -First 1
     if (-not $ipkg) { throw "No .ipkg found in libs/$lib" }
     Write-Host "Building $lib with $exe"
-    & $exe --build $ipkg.FullName 2>&1 | Out-Host
+    $buildArgs = @('--build', $ipkg.FullName)
+    if ($cg) { $buildArgs += @('--cg', $cg) }
+    & $exe @buildArgs 2>&1 | Out-Host
   }
   finally { Pop-Location }
 }
@@ -227,11 +336,13 @@ $coreLibsForIdris2 = @('prelude', 'base', 'linear', 'network', 'contrib')
 
 foreach ($lib in $coreLibsForIdris2) {
   Ensure-LibTTCDirs $lib
-  Build-Lib $lib $env:IDRIS2_BOOT
+  Build-Lib $lib $env:IDRIS2_BOOT $Idris2Cg
   Ensure-InstallDirs $lib
   Write-Host "Installing (bootstrap compiler) $lib"
   $ipkgPath = (Join-Path $repoRoot "libs/$lib/$lib.ipkg")
-  & $env:IDRIS2_BOOT --install $ipkgPath 2>&1 | Out-Host
+  $installArgs = @('--install', $ipkgPath)
+  if ($Idris2Cg) { $installArgs += @('--cg', $Idris2Cg) }
+  & $env:IDRIS2_BOOT @installArgs 2>&1 | Out-Host
   $installRoot = "$bootstrapPrefix/idris2-0.7.0/$lib-0.7.0"
   $env:IDRIS2_PATH = ($env:IDRIS2_PATH + ";$installRoot").Trim(';')
 }
@@ -248,44 +359,98 @@ Get-Item -ErrorAction SilentlyContinue `
     }
   }
 Ensure-AppTTCDirs
-& $env:IDRIS2_BOOT --build (Join-Path $repoRoot 'idris2.ipkg') 2>&1 | Out-Host
+$buildIdrisArgs = @('--build', (Join-Path $repoRoot 'idris2.ipkg'))
+if ($Idris2Cg) { $buildIdrisArgs += @('--cg', $Idris2Cg) }
+& $env:IDRIS2_BOOT @buildIdrisArgs 2>&1 | Out-Host
 
 $targetExe = Join-Path $repoRoot 'build/exec/idris2.ps1'
 
 # Attempt to build a final standalone idris2.exe using Racket (Option C)
-$bootRkt = Join-Path $targetDir 'idris2-boot.rkt'
-$finalRkt = Join-Path $targetDir 'idris2.rkt'
-$rktSource = if (Test-Path $finalRkt) { $finalRkt } elseif (Test-Path $bootRkt) { $bootRkt } else { $null }
-if ($rktSource) {
-  $finalExe = Join-Path $targetDir 'idris2.exe'
-  $needsBuild = $true
-  if (Test-Path $finalExe) {
-    try {
-      $exeTime = (Get-Item $finalExe).LastWriteTimeUtc
-      $srcTime = (Get-Item $rktSource).LastWriteTimeUtc
-      if ($exeTime -ge $srcTime) { $needsBuild = $false }
-    } catch {}
-  }
-  if ($needsBuild) {
-    Write-Host ("[bootstrap-stage2] raco exe source: {0}" -f (Split-Path -Leaf $rktSource))
-    try {
-      Push-Location $targetDir
-      raco exe -o idris2 (Split-Path -Leaf $rktSource) 2>&1 | Out-Host
-      Pop-Location
-      if (Test-Path $finalExe) {
-        Write-Host '[bootstrap-stage2] Successfully built/updated final idris2.exe'
-      } else {
-        Write-Warning '[bootstrap-stage2] raco exe finished but idris2.exe not found.'
+if ($Idris2Cg -eq 'racket') {
+  $bootRkt = Join-Path $targetDir 'idris2-boot.rkt'
+  $finalRkt = Join-Path $targetDir 'idris2.rkt'
+  $rktSource = if (Test-Path $finalRkt) { $finalRkt } elseif (Test-Path $bootRkt) { $bootRkt } else { $null }
+  if ($rktSource) {
+    $finalExe = Join-Path $targetDir 'idris2.exe'
+    $needsBuild = $true
+    if (Test-Path $finalExe) {
+      try {
+        $exeTime = (Get-Item $finalExe).LastWriteTimeUtc
+        $srcTime = (Get-Item $rktSource).LastWriteTimeUtc
+        if ($exeTime -ge $srcTime) { $needsBuild = $false }
+      } catch {}
+    }
+    if ($needsBuild) {
+      Write-Host ("[bootstrap-stage2] raco exe source: {0}" -f (Split-Path -Leaf $rktSource))
+      try {
+        Push-Location $targetDir
+        raco exe -o idris2 (Split-Path -Leaf $rktSource) 2>&1 | Out-Host
+        Pop-Location
+        if (Test-Path $finalExe) {
+          Write-Host '[bootstrap-stage2] Successfully built/updated final idris2.exe'
+        } else {
+          Write-Warning '[bootstrap-stage2] raco exe finished but idris2.exe not found.'
+        }
+      } catch {
+        Pop-Location -ErrorAction SilentlyContinue
+        Write-Warning ("[bootstrap-stage2] Failed to build final idris2.exe: {0}" -f $_.Exception.Message)
       }
-    } catch {
-      Pop-Location -ErrorAction SilentlyContinue
-      Write-Warning ("[bootstrap-stage2] Failed to build final idris2.exe: {0}" -f $_.Exception.Message)
+    } else {
+      Write-Host '[bootstrap-stage2] idris2.exe is up to date with Racket source; skipping rebuild.'
     }
   } else {
-    Write-Host '[bootstrap-stage2] idris2.exe is up to date with Racket source; skipping rebuild.'
+    Write-Host '[bootstrap-stage2] Skipping raco exe (no idris2.rkt or idris2-boot.rkt found).'
+  }
+} elseif ($Idris2Cg -eq 'chez') {
+  $candidateSchemes = @('idris2.ss','idris2-boot.ss')
+  $schemeSource = $null
+  foreach ($candidate in $candidateSchemes) {
+    $path = Join-Path $targetDir $candidate
+    if (Test-Path $path) { $schemeSource = $path; break }
+  }
+  if ($schemeSource) {
+    if ($schemeSource -like '*idris2.ss') {
+      $outputName = 'idris2.so'
+    } else {
+      $outputName = 'idris2-boot.so'
+    }
+    $outputSo = Join-Path $targetDir $outputName
+    $needsBuild = $true
+    if (Test-Path $outputSo) {
+      try {
+        $soTime = (Get-Item $outputSo).LastWriteTimeUtc
+        $srcTime = (Get-Item $schemeSource).LastWriteTimeUtc
+        if ($soTime -ge $srcTime) { $needsBuild = $false }
+      } catch {}
+    }
+    if ($needsBuild) {
+      $compileScript = Join-Path $targetDir '.compile-chez-idris2.ss'
+  $relativeSource = Split-Path -Leaf $schemeSource
+  $compileContent = '(parameterize ([compile-file-message #f] [optimize-level 3]) (compile-program "{0}"))' -f $relativeSource
+      Set-Content -Encoding ASCII -Path $compileScript -Value $compileContent
+      Write-Host ("[bootstrap-stage2] Chez compile source: {0}" -f $relativeSource)
+      Push-Location $targetDir
+      try {
+        & $Scheme --script (Split-Path -Leaf $compileScript) 2>&1 | Out-Host
+      } catch {
+        Write-Warning ("[bootstrap-stage2] Chez compile failed: {0}" -f $_.Exception.Message)
+      } finally {
+        Pop-Location
+        Remove-Item -ErrorAction SilentlyContinue $compileScript
+      }
+      if (Test-Path $outputSo) {
+        Write-Host ("[bootstrap-stage2] Successfully built/updated {0}" -f (Split-Path -Leaf $outputSo))
+      } else {
+        Write-Warning ("[bootstrap-stage2] Chez compile did not produce {0}" -f (Split-Path -Leaf $outputSo))
+      }
+    } else {
+      Write-Host ("[bootstrap-stage2] {0} is up to date with Chez source; skipping rebuild." -f (Split-Path -Leaf $outputSo))
+    }
+  } else {
+    Write-Host '[bootstrap-stage2] Skipping Chez compile (no idris2.ss or idris2-boot.ss found).'
   }
 } else {
-  Write-Host '[bootstrap-stage2] Skipping raco exe (no idris2.rkt or idris2-boot.rkt found).'
+  Write-Host '[bootstrap-stage2] Skipping executable packaging (backend does not have a dedicated packager here).'
 }
 
 # Rebuild and reinstall ALL libraries with the final compiler (idris2.exe preferred via launcher)
@@ -305,12 +470,18 @@ foreach ($lib in $allLibs) {
   }
 }
 
-# 3b) Re-detect (possibly different) TTC version from final idris2.rkt
+# 3b) Re-detect (possibly different) TTC version from final compiler source
 $finalTtcVersion = $ttcVersion
-$finalRktCandidate = Join-Path $targetDir 'idris2.rkt'
-if (Test-Path $finalRktCandidate) {
+$finalSourceCandidate = if ($Idris2Cg -eq 'racket') {
+  Join-Path $targetDir 'idris2.rkt'
+} elseif ($Idris2Cg -eq 'chez') {
+  Join-Path $targetDir 'idris2.ss'
+} else {
+  Join-Path $targetDir 'idris2.rkt'
+}
+if (Test-Path $finalSourceCandidate) {
   try {
-    $finalTxt = Get-Content -Raw $finalRktCandidate
+    $finalTxt = Get-Content -Raw $finalSourceCandidate
     if ($finalTxt -match 'ttcVersion[^0-9]*([0-9]{6,})') {
       $detected = [int64]$matches[1]
       if ($detected -ne $ttcVersion) {
@@ -320,10 +491,10 @@ if (Test-Path $finalRktCandidate) {
         Write-Host "[bootstrap-stage2] TTC version unchanged at $ttcVersion"
       }
     } else {
-      Write-Warning '[bootstrap-stage2] Could not parse TTC version from final idris2.rkt; keeping previous value.'
+      Write-Warning '[bootstrap-stage2] Could not parse TTC version from final compiler source; keeping previous value.'
     }
   } catch {
-    Write-Warning "[bootstrap-stage2] Failed reading final idris2.rkt for TTC version: $($_.Exception.Message)"
+    Write-Warning "[bootstrap-stage2] Failed reading final compiler source for TTC version: $($_.Exception.Message)"
   }
 }
 
@@ -352,10 +523,12 @@ Write-Host '[bootstrap-stage2] Rebuilding and reinstalling libraries with final 
 foreach ($lib in $allLibs) {
   Write-Host "[bootstrap-stage2] (final) rebuilding $lib"
   Ensure-LibTTCDirs $lib
-  Build-Lib $lib $targetExe
+  Build-Lib $lib $targetExe $Idris2Cg
   $ipkgPath = (Join-Path $repoRoot "libs/$lib/$lib.ipkg")
   Ensure-InstallDirs $lib
-  & $targetExe --install $ipkgPath 2>&1 | Out-Host
+  $installArgs = @('--install', $ipkgPath)
+  if ($Idris2Cg) { $installArgs += @('--cg', $Idris2Cg) }
+  & $targetExe @installArgs 2>&1 | Out-Host
 }
 
 Write-Host '[bootstrap-stage2] Library rebuild with final compiler complete'

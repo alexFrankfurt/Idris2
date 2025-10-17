@@ -450,22 +450,36 @@ runTest opts testPath = do
           runIdris idx line Nothing
 
 
+    collectArgs : String -> List String
+    collectArgs str =
+      let ws = words str in
+      let isShellOp : String -> Bool
+      isShellOp tok = (tok == "|") || (tok == "||") || (tok == "&&") ||
+               any (\sym => sym `elem` tok) ['<', '>', '&']
+      in takeWhile (not . isShellOp) ws
+
+    formatArgs : List String -> String
+    formatArgs [] = ""
+    formatArgs (x :: xs) = " " ++ escapeArg x ++ formatArgs xs
+
     runExec : Int -> String -> IO String
-    runExec idx file = do
+    runExec idx argsLine = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main " ++ escapeArg file ++ " > " ++ escapeArg outFile
-      when (isJust dbg) $ putStrLn ("[golden] runExec idx=" ++ show idx ++ " file=" ++ file)
+      let args = collectArgs argsLine
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --exec main" ++ formatArgs args ++ " > " ++ escapeArg outFile
+      when (isJust dbg) $ putStrLn ("[golden] runExec idx=" ++ show idx ++ " args=" ++ show args)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""
       pure out
 
     runCheck : Int -> String -> IO String
-    runCheck idx file = do
+    runCheck idx argsLine = do
       dbg <- getEnv "IDRIS2_TEST_DEBUG"
       let outFile = testPath ++ "/.tmpout-" ++ show idx
-      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check " ++ escapeArg file ++ " > " ++ escapeArg outFile
-      when (isJust dbg) $ putStrLn ("[golden] runCheck idx=" ++ show idx ++ " file=" ++ file)
+      let args = collectArgs argsLine
+      let cmd = "cd " ++ escapeArg testPath ++ " && " ++ windowsLauncher ++ cg ++ " --no-banner --console-width 0 --no-color --check" ++ formatArgs args ++ " > " ++ escapeArg outFile
+      when (isJust dbg) $ putStrLn ("[golden] runCheck idx=" ++ show idx ++ " args=" ++ show args)
       ignore $ system cmd
       Right out <- readFile outFile | Left _ => pure ""
       pure out
