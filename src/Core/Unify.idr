@@ -1,19 +1,14 @@
 module Core.Unify
 
 import Core.Case.CaseTree
-import Core.Context
 import Core.Context.Log
-import Core.Core
 import Core.Env
 import Core.GetType
 import Core.Normalise
 import Core.Options
-import Core.TT
 import public Core.UnifyState
 import Core.Value
 
-import Data.List
-import Data.SnocList
 import Data.Maybe
 
 import Libraries.Data.List.SizeOf
@@ -22,7 +17,6 @@ import Libraries.Data.VarSet
 
 import Libraries.Data.IntMap
 import Libraries.Data.NameMap
-import Libraries.Data.SnocList.SizeOf
 
 %default covering
 
@@ -565,9 +559,9 @@ tryInstantiate {newvars} loc mode env mname mref num mdef locs otm tm
             List (Var newvars) ->
             IVars vs newvars -> Term newvars -> Term vs ->
             Core (Maybe (Term vs))
-    mkDef (v :: vs) vars soln (Bind bfc x (Pi fc c _ ty) sc)
+    mkDef (v :: vs) vars soln (Bind bfc x (Pi fc c info ty) sc)
        = do sc' <- mkDef vs (ICons (Just v) vars) soln sc
-            pure $ (Bind bfc x (Lam fc c Explicit (Erased bfc Placeholder)) <$> sc')
+            pure $ (Bind bfc x (Lam fc c info (Erased bfc Placeholder)) <$> sc')
     mkDef vs vars soln (Bind bfc x b@(Let _ c val ty) sc)
        = do mbsc' <- mkDef vs (ICons Nothing vars) soln sc
             flip traverseOpt mbsc' $ \sc' =>

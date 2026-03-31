@@ -7,17 +7,13 @@ import Compiler.CompileExpr
 import Compiler.ANF
 import Compiler.Generated
 
-import Core.Context
-import Core.Context.Log
 import Core.Directory
 
 import Idris.Syntax
 
-import Data.List
 import Libraries.Data.DList
-import Data.Nat
-import Libraries.Data.SortedSet
-import Libraries.Data.SortedMap
+import Data.SortedSet
+import Data.SortedMap
 import Data.Vect
 
 import System
@@ -694,6 +690,10 @@ getArgsNrList (x :: xs) k = k :: getArgsNrList xs (S k)
 cTypeOfCFType : CFType -> String
 cTypeOfCFType CFUnit          = "void"
 cTypeOfCFType CFInt           = "int64_t"
+cTypeOfCFType CFInt8          = "int8_t"
+cTypeOfCFType CFInt16         = "int16_t"
+cTypeOfCFType CFInt32         = "int32_t"
+cTypeOfCFType CFInt64         = "int64_t"
 cTypeOfCFType CFUnsigned8     = "uint8_t"
 cTypeOfCFType CFUnsigned16    = "uint16_t"
 cTypeOfCFType CFUnsigned32    = "uint32_t"
@@ -709,7 +709,7 @@ cTypeOfCFType (CFFun x y)     = "void *"
 cTypeOfCFType (CFIORes x)     = "void *"
 cTypeOfCFType (CFStruct x ys) = "void *"
 cTypeOfCFType (CFUser x ys)   = "void *"
-cTypeOfCFType n = assert_total $ idris_crash ("INTERNAL ERROR: Unknonw FFI type in C backend: " ++ show n)
+cTypeOfCFType n = assert_total $ idris_crash ("INTERNAL ERROR: Unknown FFI type in C backend: " ++ show n)
 
 varNamesFromList : List ty -> Nat -> List String
 varNamesFromList str k = map (("var_" ++) . show) (getArgsNrList str k)
@@ -763,7 +763,7 @@ extractValue c (CFIORes x)      varName = extractValue c x varName
 extractValue _ (CFStruct x xs)  varName = assert_total $ idris_crash ("INTERNAL ERROR: Struct access not implemented: " ++ varName)
 -- not really total but this way this internal error does not contaminate everything else
 extractValue _ (CFUser x xs)    varName = "(Value*)" ++ varName
-extractValue _ n _ = assert_total $ idris_crash ("INTERNAL ERROR: Unknonw FFI type in C backend: " ++ show n)
+extractValue _ n _ = assert_total $ idris_crash ("INTERNAL ERROR: Unknown FFI type in C backend: " ++ show n)
 
 packCFType : (cfType:CFType) -> (varName:String) -> String
 packCFType CFUnit          varName = "((Value *)NULL)"
@@ -787,7 +787,7 @@ packCFType (CFFun x y)     varName = "makeFunction(" ++ varName ++ ")"
 packCFType (CFIORes x)     varName = packCFType x varName
 packCFType (CFStruct x xs) varName = "makeStruct(" ++ varName ++ ")"
 packCFType (CFUser x xs)   varName = varName
-packCFType n _ = assert_total $ idris_crash ("INTERNAL ERROR: Unknonw FFI type in C backend: " ++ show n)
+packCFType n _ = assert_total $ idris_crash ("INTERNAL ERROR: Unknown FFI type in C backend: " ++ show n)
 
 discardLastArgument : List ty -> List ty
 discardLastArgument [] = []

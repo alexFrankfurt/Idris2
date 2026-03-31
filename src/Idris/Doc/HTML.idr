@@ -1,18 +1,16 @@
 module Idris.Doc.HTML
 
 import Core.Context
-import Core.Core
 import Core.Directory
 
 import Data.String
+import Data.SortedMap
 
-import Libraries.Data.SortedMap
 import Libraries.Text.PrettyPrint.Prettyprinter
 import Libraries.Text.PrettyPrint.Prettyprinter.Render.HTML
 import Libraries.Text.PrettyPrint.Prettyprinter.SimpleDocTree
 
 import Idris.Doc.Annotations
-import Idris.Doc.String
 import Idris.Package.Types
 import Idris.Pretty
 import Idris.Version
